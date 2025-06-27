@@ -1,0 +1,72 @@
+const Case = require('../models/Case');
+const User = require('../models/user');
+
+const createCase = async (req, res) => {
+  const { caseType, patient } = req.body;
+
+  const officer = await User.findById(req.user._id).populate('healthFacility');
+
+  const newCase = await Case.create({
+    officer: req.user._id,
+    caseType,
+    healthFacility: officer.healthFacility._id,
+    status: 'suspected',
+    patient,
+  });
+
+  res.status(201).json(newCase);
+};
+
+const updateCaseStatus = async (req, res) => {
+  const caseId = req.params.id;
+  const { status, patientStatus } = req.body;
+
+  if (!status && !patientStatus) {
+    return res.status(400).json({ message: 'Missing status or patientStatus' });
+  }
+
+  const existingCase = await Case.findById(caseId);
+  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+
+  if (!existingCase.officer.equals(req.user._id)) {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
+  if (status && ['confirmed', 'rule-out'].includes(status)) {
+    existingCase.status = status;
+  }
+
+  if (patientStatus && ['Recovered', 'Ongoing treatment', 'Deceased'].includes(patientStatus)) {
+    existingCase.patient.status = patientStatus;
+  }
+
+  await existingCase.save();
+  res.json(existingCase);
+};
+
+const getCases = async (req, res) => {
+  const filter = req.user.role === 'admin'
+    ? {}
+    : { status: { $in: ['suspected', 'confirmed'] } };
+
+  const cases = await Case.find(filter)
+    .populate('officer', 'fullName')
+    .populate('healthFacility');
+
+  res.json(cases);
+};
+
+const getOfficerPatients = async (req, res) => {
+  const cases = await Case.find({ officer: req.user._id }).select('patient');
+  res.json(cases.map(c => c.patient));
+};
+
+const getOfficerCases = async (req, res) => {
+  const cases = await Case.find({ officer: req.user._id })
+    .populate('healthFacility')
+    .populate('officer', 'fullName');
+  res.json(cases);
+};
+
+
+module.exports = { createCase, updateCaseStatus, getCases, getOfficerPatients, getOfficerCases };
