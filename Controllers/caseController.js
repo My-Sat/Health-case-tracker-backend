@@ -1,5 +1,5 @@
 const Case = require('../models/Case');
-const User = require('../models/user');
+const User = require('../models/User');
 
 const createCase = async (req, res) => {
   const { caseType, patient } = req.body;
