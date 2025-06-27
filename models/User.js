@@ -9,4 +9,4 @@ const userSchema = new mongoose.Schema({
   healthFacility: { type: mongoose.Schema.Types.ObjectId, ref: 'HealthFacility' }
 }, { timestamps: true });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model('user', userSchema);
