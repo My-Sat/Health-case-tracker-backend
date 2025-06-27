@@ -8,7 +8,7 @@ const {
   getOfficerCases
 } = require('../Controllers/caseController');
 
-const { protect } = require('../middlewares/authMiddleware');
+const { protect } = require('../middleWares/authMiddleware');
 
 router.post('/', protect, createCase);
 router.put('/:id/status', protect, updateCaseStatus);
