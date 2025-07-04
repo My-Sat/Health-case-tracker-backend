@@ -32,7 +32,7 @@ const updateCaseStatus = async (req, res) => {
     return res.status(403).json({ message: 'Unauthorized' });
   }
 
-  if (status && ['confirmed', 'rule-out'].includes(status)) {
+  if (status && ['confirmed', 'not a case'].includes(status)) {
     existingCase.status = status;
   }
 
