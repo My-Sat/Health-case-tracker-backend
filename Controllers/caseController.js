@@ -47,7 +47,7 @@ const updateCaseStatus = async (req, res) => {
 const getCases = async (req, res) => {
   const filter = req.user.role === 'admin'
     ? {}
-    : { status: { $in: ['suspected', 'confirmed'] } };
+    : { status: { $in: ['suspected', 'confirmed', 'not a case'] } };
 
   const cases = await Case.find(filter)
     .populate('officer', 'fullName')
