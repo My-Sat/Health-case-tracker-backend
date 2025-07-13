@@ -3,6 +3,10 @@ const HealthFacility = require('../models/HealthFacility');
 const createFacility = async (req, res) => {
   const { name, location } = req.body;
 
+  if (!location?.geo?.lat || !location?.geo?.lng) {
+    return res.status(400).json({ message: 'Missing GPS coordinates' });
+  }
+
   const exists = await HealthFacility.findOne({ name });
   if (exists) return res.status(400).json({ message: 'Facility already exists' });
 
@@ -10,6 +14,7 @@ const createFacility = async (req, res) => {
 
   res.status(201).json(facility);
 };
+
 
 const getAllFacilities = async (req, res) => {
   const facilities = await HealthFacility.find();
