@@ -2,14 +2,19 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const HealthFacility = require('../models/HealthFacility');
+const crypto = require('crypto');
+const sendEmail = require('../utilities/sendEmail');
 
 const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
 const registerUser = async (req, res) => {
-  const { fullName, username, password, contactInfo, healthFacility } = req.body;
+  const { fullName, username, email, password, contactInfo, healthFacility } = req.body;
 
   const existingUser = await User.findOne({ username });
   if (existingUser) return res.status(400).json({ message: 'Username already exists' });
+
+  const existingEmail = await User.findOne({ email });
+  if (existingEmail) return res.status(400).json({ message: 'Email already in use' });
 
   const facility = await HealthFacility.findById(healthFacility);
   if (!facility) return res.status(404).json({ message: 'Invalid health facility' });
@@ -19,6 +24,7 @@ const registerUser = async (req, res) => {
   const user = await User.create({
     fullName,
     username,
+    email,
     password: hashedPassword,
     contactInfo,
     healthFacility
@@ -28,6 +34,7 @@ const registerUser = async (req, res) => {
     _id: user._id,
     fullName: user.fullName,
     username: user.username,
+    email: user.email,
     token: generateToken(user._id),
     role: user.role
   });
@@ -46,10 +53,58 @@ const loginUser = async (req, res) => {
     _id: user._id,
     fullName: user.fullName,
     username: user.username,
+    email: user.email,
     role: user.role,
     healthFacility: user.healthFacility,
     token: generateToken(user._id)
   });
 };
 
-module.exports = { registerUser, loginUser };
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+  if (!user)
+    return res.status(404).json({ message: 'No account found with that email' });
+
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+  const expire = Date.now() + 3600000; // 1h
+
+  user.passwordResetToken = resetTokenHash;
+  user.passwordResetExpires = expire;
+  await user.save();
+
+  const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}&id=${user._id}`;
+  const message = `You requested a password reset. Use this link to reset (expires in 1h):\n\n${resetUrl}`;
+
+  try {
+    await sendEmail({ to: email, subject: 'Password Reset', text: message });
+    res.json({ message: 'Reset link sent to email' });
+  } catch (err) {
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+    res.status(500).json({ message: 'Email could not be sent' });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  const { id, token, newPassword } = req.body;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+  const user = await User.findOne({
+    _id: id,
+    passwordResetToken: tokenHash,
+    passwordResetExpires: { $gt: Date.now() },
+  });
+  if (!user) return res.status(400).json({ message: 'Invalid or expired token' });
+
+  user.password = await bcrypt.hash(newPassword, 10);
+  user.passwordResetToken = undefined;
+  user.passwordResetExpires = undefined;
+  await user.save();
+
+  res.json({ message: 'Password reset successful' });
+};
+
+module.exports = { registerUser, loginUser, forgotPassword, resetPassword };
