@@ -63,38 +63,31 @@ const loginUser = async (req, res) => {
 const forgotPassword = async (req, res) => {
   const { email } = req.body;
   const user = await User.findOne({ email });
-  if (!user)
-    return res.status(404).json({ message: 'No account found with that email' });
+  if (!user) return res.status(404).json({ message: 'No account found with that email' });
 
-  const resetToken = crypto.randomBytes(32).toString('hex');
-  const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-  const expire = Date.now() + 3600000; // 1h
+  const resetCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
+  const hashedCode = crypto.createHash('sha256').update(resetCode).digest('hex');
+  const expire = Date.now() + 15 * 60 * 1000; // 15 minutes
 
-  user.passwordResetToken = resetTokenHash;
+  user.passwordResetToken = hashedCode;
   user.passwordResetExpires = expire;
   await user.save();
 
-  const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}&id=${user._id}`;
-  const htmlMessage = `
+  const html = `
     <p>You requested a password reset.</p>
-    <p>
-      <a href="${resetUrl}" style="padding: 10px 16px; background-color: teal; color: white; text-decoration: none; border-radius: 6px;">
-        Click here to reset your password
-      </a>
-    </p>
-    <p>If the button doesn't work, copy and paste this link into your browser:</p>
-    <p>${resetUrl}</p>
-    <p>This link will expire in 1 hour.</p>
+    <p>Your 6-digit reset code is:</p>
+    <h2>${resetCode}</h2>
+    <p>This code will expire in 15 minutes.</p>
   `;
 
   try {
     await sendEmail({
       to: email,
-      subject: 'Password Reset',
-      html: htmlMessage,
-      text: `Reset your password here: ${resetUrl}`,
+      subject: 'Your Password Reset Code',
+      html,
+      text: `Your reset code is: ${resetCode}`,
     });
-    res.json({ message: 'Reset link sent to email' });
+    res.json({ message: 'Reset code sent to email', userId: user._id });
   } catch (err) {
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
@@ -122,4 +115,20 @@ const resetPassword = async (req, res) => {
   res.json({ message: 'Password reset successful' });
 };
 
-module.exports = { registerUser, loginUser, forgotPassword, resetPassword };
+const verifyResetCode = async (req, res) => {
+  const { id, code } = req.body;
+  const hashedCode = crypto.createHash('sha256').update(code).digest('hex');
+
+  const user = await User.findOne({
+    _id: id,
+    passwordResetToken: hashedCode,
+    passwordResetExpires: { $gt: Date.now() },
+  });
+
+  if (!user) return res.status(400).json({ message: 'Invalid or expired code' });
+
+  res.json({ message: 'Code verified' });
+};
+
+
+module.exports = { registerUser, loginUser, forgotPassword, resetPassword, verifyResetCode };
