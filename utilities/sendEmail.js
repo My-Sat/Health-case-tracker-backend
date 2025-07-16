@@ -10,17 +10,18 @@ const transport = nodemailer.createTransport({
   },
 });
 
-module.exports = async function sendEmail({ to, subject, text }) {
+module.exports = async function sendEmail({ to, subject, text, html }) {
   try {
     await transport.sendMail({
       from: `"No Reply" <${process.env.SMTP_FROM}>`,
       to,
       subject,
       text,
+      html, // include HTML body
     });
     console.log('Email sent to:', to);
   } catch (error) {
     console.error('Email send failed:', error);
-    throw error; // This triggers the catch in forgotPassword
+    throw error;
   }
 };
