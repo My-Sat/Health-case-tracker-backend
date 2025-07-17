@@ -1,6 +1,6 @@
 const CaseType = require('../models/caseType');
 
-const createCaseType = async (req, res) => {
+const create_case_type = async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Only admin can create case types' });
   }
@@ -11,9 +11,9 @@ const createCaseType = async (req, res) => {
   res.status(201).json(ct);
 };
 
-const listCaseTypes = async (req, res) => {
+const list_case_types = async (req, res) => {
   const types = await CaseType.find().sort({ name: 1 });
   res.json(types);
 };
 
-module.exports = { createCaseType, listCaseTypes };
+module.exports = { create_case_type, list_case_types };

@@ -7,7 +7,7 @@ const {
   getDistricts,
   getSubDistricts,
   getFacilitiesUnder
-} = require('../Controllers/facilityController');
+} = require('../controllers/facilityController');
 
 const { protect, adminOnly } = require('../middleWares/authMiddleware');
 

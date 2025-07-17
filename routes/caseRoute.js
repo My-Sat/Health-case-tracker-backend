@@ -6,7 +6,7 @@ const {
   getCases,
   getOfficerPatients,
   getOfficerCases
-} = require('../Controllers/caseController');
+} = require('../controllers/case_controller');
 
 const { protect } = require('../middleWares/authMiddleware');
 
