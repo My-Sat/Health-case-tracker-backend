@@ -9,7 +9,7 @@ const {
   getFacilitiesUnder
 } = require('../Controllers/facilityController');
 
-const { protect, adminOnly } = require('../middleWares/authMiddleware');
+const { protect, adminOnly } = require('../middlewares/auth_middleware');
 
 router.post('/', protect, adminOnly, createFacility);
 router.get('/', getAllFacilities);
