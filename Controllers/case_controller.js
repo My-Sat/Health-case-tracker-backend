@@ -1,6 +1,6 @@
 const Case = require('../models/Case');
 const User = require('../models/User');
-const CaseType = require('../models/CaseType');
+const CaseType = require('../models/case_type');
 
 const createCase = async (req, res) => {
   const { caseType, patient } = req.body;
@@ -98,3 +98,4 @@ module.exports = {
   getOfficerPatients,
   getOfficerCases,
 };
+
