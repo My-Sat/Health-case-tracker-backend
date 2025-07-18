@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 
-const userRoutes = require('./routes/userRoutes');
+const userRoutes = require('./routes/user_routes');
 const facilityRoutes = require('./routes/facilityRoute');
 const caseRoutes = require('./routes/caseRoute');
 const caseTypeRoutes = require('./routes/case_type_route');
