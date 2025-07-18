@@ -6,17 +6,30 @@ const {
   getRegions,
   getDistricts,
   getSubDistricts,
-  getFacilitiesUnder
+  getFacilitiesUnder,
+  registerUser,
+   loginUser, 
+   forgotPassword, 
+   resetPassword, 
+   verifyResetCode
 } = require('../controllers/facilityController');
 
 const { protect, adminOnly } = require('../middleWares/authMiddleware');
 
-router.post('/', protect, adminOnly, createFacility);
-router.get('/', getAllFacilities);
+router.post('/facilities', protect, adminOnly, createFacility);
+router.get('/facilities', getAllFacilities);
 
-router.get('/regions', getRegions);
-router.get('/districts', getDistricts);
-router.get('/subDistricts', getSubDistricts);
-router.get('/under', getFacilitiesUnder);
+router.get('/facilities/regions', getRegions);
+router.get('/facilities/districts', getDistricts);
+router.get('/facilities/subDistricts', getSubDistricts);
+router.get('/facilities/under', getFacilitiesUnder);
+
+//FACILITY ROUTES TEMPORARY PLACED HERE DUE TO ONRENDER.COM DEPLOYMENT ISSUES
+router.post('/users/register', registerUser);
+router.post('/users/login', loginUser);
+router.post('/users/forgot-password', forgotPassword);
+router.post('/users/reset-password', resetPassword);
+router.post('/users/verify-reset-code', verifyResetCode);
+
 
 module.exports = router;
