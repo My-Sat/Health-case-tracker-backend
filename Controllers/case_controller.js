@@ -1,20 +1,34 @@
 const Case = require('../models/Case');
 const User = require('../models/User');
+const CaseType = require('../models/CaseType');
 
 const createCase = async (req, res) => {
   const { caseType, patient } = req.body;
 
   const officer = await User.findById(req.user._id).populate('healthFacility');
+  if (!officer) {
+    return res.status(404).json({ message: 'Officer not found' });
+  }
+
+  const type = await CaseType.findById(caseType);
+  if (!type) {
+    return res.status(400).json({ message: 'Invalid case type ID' });
+  }
 
   const newCase = await Case.create({
     officer: req.user._id,
-    caseType,
+    caseType: type._id,
     healthFacility: officer.healthFacility._id,
     status: 'suspected',
     patient,
   });
 
-  res.status(201).json(newCase);
+  const populatedCase = await Case.findById(newCase._id)
+    .populate('officer', 'fullName')
+    .populate('healthFacility')
+    .populate('caseType');
+
+  res.status(201).json(populatedCase);
 };
 
 const updateCaseStatus = async (req, res) => {
@@ -41,7 +55,13 @@ const updateCaseStatus = async (req, res) => {
   }
 
   await existingCase.save();
-  res.json(existingCase);
+
+  const populatedCase = await Case.findById(existingCase._id)
+    .populate('officer', 'fullName')
+    .populate('healthFacility')
+    .populate('caseType');
+
+  res.json(populatedCase);
 };
 
 const getCases = async (req, res) => {
@@ -51,7 +71,8 @@ const getCases = async (req, res) => {
 
   const cases = await Case.find(filter)
     .populate('officer', 'fullName')
-    .populate('healthFacility');
+    .populate('healthFacility')
+    .populate('caseType');
 
   res.json(cases);
 };
@@ -64,9 +85,16 @@ const getOfficerPatients = async (req, res) => {
 const getOfficerCases = async (req, res) => {
   const cases = await Case.find({ officer: req.user._id })
     .populate('healthFacility')
-    .populate('officer', 'fullName');
+    .populate('officer', 'fullName')
+    .populate('caseType');
+
   res.json(cases);
 };
 
-
-module.exports = { createCase, updateCaseStatus, getCases, getOfficerPatients, getOfficerCases };
+module.exports = {
+  createCase,
+  updateCaseStatus,
+  getCases,
+  getOfficerPatients,
+  getOfficerCases,
+};

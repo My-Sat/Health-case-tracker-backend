@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const caseSchema = new mongoose.Schema({
   officer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  caseType: { type: String, required: true },
+  caseType: { type: mongoose.Schema.Types.ObjectId, ref: 'CaseType', required: true },
   timeline: { type: Date, default: Date.now },
   status: { type: String, enum: ['suspected', 'confirmed', 'not a case'], default: 'suspected' },
   healthFacility: { type: mongoose.Schema.Types.ObjectId, ref: 'HealthFacility', required: true },
