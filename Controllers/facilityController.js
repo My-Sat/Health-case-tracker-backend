@@ -2,7 +2,6 @@ const HealthFacility = require('../models/HealthFacility');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const HealthFacility = require('../models/HealthFacility');
 const crypto = require('crypto');
 const sendEmail = require('../utilities/sendEmail');
 
