@@ -12,7 +12,7 @@ const {
    forgotPassword, 
    resetPassword, 
    verifyResetCode
-} = require('../controllers/facilityController');
+} = require('../Controllers/facilityController');
 
 const { protect, adminOnly } = require('../middleWares/authMiddleware');
 

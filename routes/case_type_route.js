@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { create_case_type, list_case_types } = require('../controllers/case_type_controller');
+const { create_case_type, list_case_types } = require('../Controllers/case_type_controller');
 const adminOnly = require('../middleWares/authMiddleware');
 
 router.post('/', adminOnly, create_case_type);
