@@ -1,32 +1,17 @@
 const Case = require('../models/Case');
 const User = require('../models/User');
-const CaseType = require('../models/caseType');
 
 const createCase = async (req, res) => {
   const { caseType, patient } = req.body;
 
-  const validCase = await CaseType.findOne({ name: caseType });
-  if (!validCase) {
-    return res.status(400).json({ message: 'Invalid case type' });
-  }
-
   const officer = await User.findById(req.user._id).populate('healthFacility');
-  if (!officer || !officer.healthFacility) {
-    return res.status(400).json({ message: 'Health facility not assigned to officer' });
-  }
-
-  const facilityLoc = officer.healthFacility.location;
-  const caseCommunity = patient.community || facilityLoc.community;
 
   const newCase = await Case.create({
     officer: req.user._id,
     caseType,
     healthFacility: officer.healthFacility._id,
     status: 'suspected',
-    patient: {
-      ...patient,
-      community: caseCommunity,
-    },
+    patient,
   });
 
   res.status(201).json(newCase);
