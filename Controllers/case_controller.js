@@ -3,7 +3,7 @@ const User = require('../models/User');
 const CaseType = require('../models/case_type');
 
 const createCase = async (req, res) => {
-  const { caseType, patient } = req.body;
+const { caseType, patient, caseCommunity } = req.body;
 
   const officer = await User.findById(req.user._id).populate('healthFacility');
   if (!officer) {
@@ -20,6 +20,7 @@ const createCase = async (req, res) => {
     caseType: type._id,
     healthFacility: officer.healthFacility._id,
     status: 'suspected',
+    caseCommunity,
     patient,
   });
 
