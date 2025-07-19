@@ -3,7 +3,7 @@ const User = require('../models/User');
 const CaseType = require('../models/case_type');
 
 const createCase = async (req, res) => {
-const { caseType, patient, caseCommunity } = req.body;
+  const { caseType, patient, community } = req.body;
 
   const officer = await User.findById(req.user._id).populate('healthFacility');
   if (!officer) {
@@ -15,12 +15,14 @@ const { caseType, patient, caseCommunity } = req.body;
     return res.status(400).json({ message: 'Invalid case type ID' });
   }
 
+  const selectedCommunity = community?.trim() || officer.healthFacility.location.community;
+
   const newCase = await Case.create({
     officer: req.user._id,
     caseType: type._id,
     healthFacility: officer.healthFacility._id,
     status: 'suspected',
-    caseCommunity,
+    community: selectedCommunity,
     patient,
   });
 

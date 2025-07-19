@@ -5,8 +5,8 @@ const caseSchema = new mongoose.Schema({
   caseType: { type: mongoose.Schema.Types.ObjectId, ref: 'CaseType', required: true },
   timeline: { type: Date, default: Date.now },
   status: { type: String, enum: ['suspected', 'confirmed', 'not a case'], default: 'suspected' },
-  caseCommunity: { type: String, required: true },
   healthFacility: { type: mongoose.Schema.Types.ObjectId, ref: 'HealthFacility', required: true },
+  community: { type: String },
   patient: {
     name: { type: String, required: true },
     age: { type: Number, required: true },
