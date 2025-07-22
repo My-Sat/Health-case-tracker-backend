@@ -8,8 +8,8 @@ const healthFacilitySchema = new mongoose.Schema({
     district: { type: String, required: true },
     region: { type: String, required: true },
     geo: {
-      lat: { type: Number, required: true },
-      lng: { type: Number, required: true }
+      lat: { type: Number },
+      lng: { type: Number}
     }
   }
 }, { timestamps: true });
