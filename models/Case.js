@@ -7,6 +7,7 @@ const caseSchema = new mongoose.Schema({
   status: { type: String, enum: ['suspected', 'confirmed', 'not a case'], default: 'suspected' },
   healthFacility: { type: mongoose.Schema.Types.ObjectId, ref: 'HealthFacility', required: true },
   community: { type: String },
+  archived: { type: Boolean, default: false },
   patient: {
     name: { type: String, required: true },
     age: { type: Number, required: true },

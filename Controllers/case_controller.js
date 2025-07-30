@@ -68,9 +68,9 @@ const updateCaseStatus = async (req, res) => {
 };
 
 const getCases = async (req, res) => {
-  const filter = req.user.role === 'admin'
-    ? {}
-    : { status: { $in: ['suspected', 'confirmed', 'not a case'] } };
+const filter = req.user.role === 'admin'
+  ? { archived: false }
+  : { status: { $in: ['suspected', 'confirmed', 'not a case'] }, archived: false };
 
   const cases = await Case.find(filter)
     .populate('officer', 'fullName')
@@ -81,12 +81,12 @@ const getCases = async (req, res) => {
 };
 
 const getOfficerPatients = async (req, res) => {
-  const cases = await Case.find({ officer: req.user._id }).select('patient');
+const cases = await Case.find({ officer: req.user._id, archived: false }).select('patient');
   res.json(cases.map(c => c.patient));
 };
 
 const getOfficerCases = async (req, res) => {
-  const cases = await Case.find({ officer: req.user._id })
+const cases = await Case.find({ officer: req.user._id, archived: false })
     .populate('healthFacility')
     .populate('officer', 'fullName')
     .populate('caseType');

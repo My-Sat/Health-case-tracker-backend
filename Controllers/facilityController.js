@@ -19,7 +19,7 @@ if (location?.geo && (isNaN(location.geo.lat) || isNaN(location.geo.lng))) {
 
 
 const getAllFacilities = async (req, res) => {
-  const facilities = await HealthFacility.find();
+const facilities = await HealthFacility.find({ archived: false });
   res.json(facilities);
 };
 
@@ -106,6 +106,57 @@ const updateFacility = async (req, res) => {
   res.json(facility);
 };
 
+const archiveFacility = async (req, res) => {
+  const { id } = req.params;
+
+  const facility = await HealthFacility.findById(id);
+  if (!facility) {
+    return res.status(404).json({ message: 'Facility not found' });
+  }
+
+  facility.archived = true;
+  await facility.save();
+
+  // Archive all cases under this facility
+  await Case.updateMany(
+    { healthFacility: facility._id },
+    { $set: { archived: true } }
+  );
+
+  res.json({ message: 'Facility and associated cases archived' });
+};
+
+const getArchivedFacilities = async (req, res) => {
+  const facilities = await HealthFacility.find({ archived: true });
+  res.json(facilities);
+};
+
+const patchFacility = async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body;
+
+  const facility = await HealthFacility.findByIdAndUpdate(id, updateData, {
+    new: true,
+  });
+
+  if (!facility) {
+    return res.status(404).json({ message: 'Facility not found' });
+  }
+
+  // If unarchiving, also unarchive all associated cases
+  if (updateData.archived === false) {
+    await Case.updateMany(
+      { healthFacility: facility._id },
+      { $set: { archived: false } }
+    );
+  }
+
+  res.json(facility);
+};
+
+
+
+
 
 
 
@@ -118,5 +169,8 @@ module.exports = {
   getFacilitiesUnder,
   getCommunities,
   deleteFacility,
-  updateFacility
+  updateFacility,
+  archiveFacility,
+  getArchivedFacilities,
+  patchFacility
   };
