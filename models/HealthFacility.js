@@ -11,7 +11,8 @@ const healthFacilitySchema = new mongoose.Schema({
       lat: { type: Number },
       lng: { type: Number}
     }
-  }
+  },
+  archived: { type: Boolean, default: false }
 }, { timestamps: true });
 
 module.exports = mongoose.model('HealthFacility', healthFacilitySchema);
