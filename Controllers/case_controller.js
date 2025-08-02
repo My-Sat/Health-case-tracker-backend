@@ -108,6 +108,56 @@ const deleteCase = async (req, res) => {
   res.json({ message: 'Case deleted successfully' });
 };
 
+const editCaseDetails = async (req, res) => {
+  const caseId = req.params.id;
+  const { caseType, community, patient, status } = req.body;
+
+  const existing = await Case.findById(caseId);
+  if (!existing) return res.status(404).json({ message: 'Case not found' });
+
+  if (!existing.officer.equals(req.user._id) && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
+  // ✅ Update case type
+  if (caseType) {
+    const type = await CaseType.findById(caseType);
+    if (!type) return res.status(400).json({ message: 'Invalid case type' });
+    existing.caseType = type._id;
+  }
+
+  // ✅ Update community
+  if (community !== undefined) {
+    existing.community = typeof community === 'string' ? community.trim() : existing.community;
+  }
+
+  // ✅ Update case status
+  if (status && ['suspected', 'confirmed', 'not a case'].includes(status)) {
+    existing.status = status;
+  }
+
+  // ✅ Update patient fields
+  if (patient) {
+    if (patient.name) existing.patient.name = patient.name;
+    if (patient.age != null) existing.patient.age = patient.age;
+    if (patient.gender) existing.patient.gender = patient.gender;
+    if (patient.phone) existing.patient.phone = patient.phone;
+
+    if (patient.status && ['Recovered', 'Ongoing treatment', 'Deceased'].includes(patient.status)) {
+      existing.patient.status = patient.status;
+    }
+  }
+
+  await existing.save();
+
+  const populated = await Case.findById(caseId)
+    .populate('officer', 'fullName')
+    .populate('healthFacility')
+    .populate('caseType');
+
+  res.json(populated);
+};
+
 
 module.exports = {
   createCase,
@@ -115,6 +165,7 @@ module.exports = {
   getCases,
   getOfficerPatients,
   getOfficerCases,
-  deleteCase
+  deleteCase, 
+  editCaseDetails
 };
 

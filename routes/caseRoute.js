@@ -6,7 +6,8 @@ const {
   getCases,
   getOfficerPatients,
   getOfficerCases,
-  deleteCase
+  deleteCase,
+  editCaseDetails
 } = require('../Controllers/case_controller');
 
 const { protect } = require('../middlewares/auth_middleware');
@@ -17,6 +18,8 @@ router.get('/', protect, getCases);
 router.get('/my-patients', protect, getOfficerPatients);
 router.get('/my-cases', protect, getOfficerCases);
 router.delete('/:id', protect, deleteCase);
+router.put('/:id/edit', protect, editCaseDetails);
+
 
 
 
