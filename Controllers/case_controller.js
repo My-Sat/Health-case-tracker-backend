@@ -158,6 +158,50 @@ const editCaseDetails = async (req, res) => {
   res.json(populated);
 };
 
+const archiveCase = async (req, res) => {
+  const caseId = req.params.id;
+
+  const existingCase = await Case.findById(caseId);
+  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+
+  if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
+  existingCase.archived = true;
+  await existingCase.save();
+
+  res.json({ message: 'Case archived successfully' });
+};
+
+const getArchivedCases = async (req, res) => {
+  const archived = await Case.find({ archived: true })
+    .populate('officer', 'fullName')
+    .populate('healthFacility')
+    .populate('caseType');
+
+  res.json(archived);
+};
+
+const unarchiveCase = async (req, res) => {
+  const caseId = req.params.id;
+
+  const existingCase = await Case.findById(caseId);
+  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+
+  if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
+  existingCase.archived = false;
+  await existingCase.save();
+
+  res.json({ message: 'Case unarchived successfully' });
+};
+
+
+
+
 
 module.exports = {
   createCase,
@@ -166,6 +210,9 @@ module.exports = {
   getOfficerPatients,
   getOfficerCases,
   deleteCase, 
-  editCaseDetails
+  editCaseDetails,
+  archiveCase,
+  getArchivedCases,
+  unarchiveCase
 };
 

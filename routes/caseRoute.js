@@ -7,7 +7,10 @@ const {
   getOfficerPatients,
   getOfficerCases,
   deleteCase,
-  editCaseDetails
+  editCaseDetails, 
+  archiveCase,
+  getArchivedCases,
+  unarchiveCase
 } = require('../Controllers/case_controller');
 
 const { protect } = require('../middlewares/auth_middleware');
@@ -19,6 +22,12 @@ router.get('/my-patients', protect, getOfficerPatients);
 router.get('/my-cases', protect, getOfficerCases);
 router.delete('/:id', protect, deleteCase);
 router.put('/:id/edit', protect, editCaseDetails);
+router.patch('/:id/archive', protect, archiveCase);
+router.get('/archived', protect, getArchivedCases);
+router.patch('/:id/unarchive', protect, unarchiveCase);
+
+
+
 
 
 
