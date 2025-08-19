@@ -1,207 +1,352 @@
+// Controllers/case_controller.js
 const Case = require('../models/Case');
 const User = require('../models/User');
 const CaseType = require('../models/case_type');
+const HealthFacility = require('../models/HealthFacility');
+
+const {
+  findOrCreateRegion,
+  findOrCreateDistrict,
+  findOrCreateSubDistrict,
+  findOrCreateCommunity,
+} = require('../utilities/location');
+
+// Utility: resolve/create a Community ID based on (optional) location + name
+async function resolveCommunityId({ communityName, location, fallbackFacility }) {
+  // If no community name provided at all, use the facility's configured community
+  if (!communityName || !communityName.trim()) {
+    return fallbackFacility.community; // ObjectId
+  }
+
+  // If a location object is provided, use that path (region > district > [subDistrict?])
+  if (location && location.region && location.district) {
+    const regionDoc = await findOrCreateRegion(location.region.trim());
+    const districtDoc = await findOrCreateDistrict(location.district.trim(), regionDoc._id);
+
+    let subDistrictDoc = null;
+    if (location.subDistrict && location.subDistrict.trim()) {
+      subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
+    }
+
+    const communityDoc = await findOrCreateCommunity(
+      communityName.trim(),
+      subDistrictDoc ? subDistrictDoc._id : districtDoc._id // same fallback pattern used elsewhere
+    );
+    return communityDoc._id;
+  }
+
+  // Otherwise: create/find the community under the officer's facility path
+  const parentId = fallbackFacility.subDistrict ?? fallbackFacility.district;
+  const communityDoc = await findOrCreateCommunity(communityName.trim(), parentId);
+  return communityDoc._id;
+}
 
 const createCase = async (req, res) => {
-  const { caseType, patient, community } = req.body;
+  try {
+    const { caseType, patient, community, location, useFacilityCommunity } = req.body;
 
-  const officer = await User.findById(req.user._id).populate('healthFacility');
-  if (!officer) {
-    return res.status(404).json({ message: 'Officer not found' });
+    // Officer & facility
+    const officer = await User.findById(req.user._id).select('healthFacility fullName');
+    if (!officer || !officer.healthFacility) {
+      return res.status(404).json({ message: 'Officer or officer facility not found' });
+    }
+
+    const facility = await HealthFacility.findById(officer.healthFacility).select(
+      'region district subDistrict community'
+    );
+    if (!facility) {
+      return res.status(404).json({ message: 'Health facility not found' });
+    }
+
+    // Case type
+    const type = await CaseType.findById(caseType);
+    if (!type) {
+      return res.status(400).json({ message: 'Invalid case type ID' });
+    }
+
+    // Resolve community id per rules
+    let communityId;
+    if (useFacilityCommunity === true) {
+      // explicit flag from client: use facility community (ObjectId)
+      communityId = facility.community;
+    } else {
+      // fallback behavior based on provided community name or blank -> resolveCommunityId will use facility.community
+      communityId = await resolveCommunityId({
+        communityName: community, // may be null/empty if using facility community
+        location,                 // optional: { region, district, subDistrict? }
+        fallbackFacility: facility,
+      });
+    }
+
+    // Create case
+    const newCase = await Case.create({
+      officer: req.user._id,
+      caseType: type._id,
+      healthFacility: facility._id,
+      status: 'suspected',
+      community: communityId,
+      patient,
+    });
+
+    const populated = await Case.findById(newCase._id)
+      .populate('officer', 'fullName')
+      .populate('healthFacility')
+      .populate('caseType')
+      .populate('community');
+
+    res.status(201).json(populated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to create case' });
   }
-
-  const type = await CaseType.findById(caseType);
-  if (!type) {
-    return res.status(400).json({ message: 'Invalid case type ID' });
-  }
-
-  const selectedCommunity = community?.trim() || officer.healthFacility.location.community;
-
-  const newCase = await Case.create({
-    officer: req.user._id,
-    caseType: type._id,
-    healthFacility: officer.healthFacility._id,
-    status: 'suspected',
-    community: selectedCommunity,
-    patient,
-  });
-
-  const populatedCase = await Case.findById(newCase._id)
-    .populate('officer', 'fullName')
-    .populate('healthFacility')
-    .populate('caseType');
-
-  res.status(201).json(populatedCase);
 };
 
 const updateCaseStatus = async (req, res) => {
-  const caseId = req.params.id;
-  const { status, patientStatus } = req.body;
+  try {
+    const caseId = req.params.id;
+    const { status, patientStatus } = req.body;
 
-  if (!status && !patientStatus) {
-    return res.status(400).json({ message: 'Missing status or patientStatus' });
+    if (!status && !patientStatus) {
+      return res.status(400).json({ message: 'Missing status or patientStatus' });
+    }
+
+    const existingCase = await Case.findById(caseId);
+    if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+
+    if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    if (status && ['confirmed', 'not a case', 'suspected'].includes(status)) {
+      existingCase.status = status;
+    }
+
+    if (patientStatus && ['Recovered', 'Ongoing treatment', 'Deceased'].includes(patientStatus)) {
+      existingCase.patient.status = patientStatus;
+    }
+
+    await existingCase.save();
+
+    const populated = await Case.findById(existingCase._id)
+      .populate('officer', 'fullName')
+      .populate('healthFacility')
+      .populate('caseType')
+      .populate('community');
+    res.json(populated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to update case status' });
   }
-
-  const existingCase = await Case.findById(caseId);
-  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
-
-  if (!existingCase.officer.equals(req.user._id)) {
-    return res.status(403).json({ message: 'Unauthorized' });
-  }
-
-  if (status && ['confirmed', 'not a case'].includes(status)) {
-    existingCase.status = status;
-  }
-
-  if (patientStatus && ['Recovered', 'Ongoing treatment', 'Deceased'].includes(patientStatus)) {
-    existingCase.patient.status = patientStatus;
-  }
-
-  await existingCase.save();
-
-  const populatedCase = await Case.findById(existingCase._id)
-    .populate('officer', 'fullName')
-    .populate('healthFacility')
-    .populate('caseType');
-
-  res.json(populatedCase);
 };
 
 const getCases = async (req, res) => {
-const filter = req.user.role === 'admin'
-  ? { archived: false }
-  : { status: { $in: ['suspected', 'confirmed', 'not a case'] }, archived: false };
+  try {
+    const cases = await Case.find({ officer: req.user._id, archived: false })
+      .populate('caseType', 'name')
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community', 'name') // patient community if outside facility community
+      .sort({ timeline: -1 })
+      .lean();
 
-  const cases = await Case.find(filter)
-    .populate('officer', 'fullName')
-    .populate('healthFacility')
-    .populate('caseType');
+    // Back-compat: synthesize healthFacility.location with names (not ids)
+    cases.forEach((c) => {
+      const hf = c.healthFacility;
+      if (hf && !hf.location) {
+        hf.location = {
+          region: hf.region?.name ?? hf.region ?? null,
+          district: hf.district?.name ?? hf.district ?? null,
+          subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+          community: hf.community?.name ?? hf.community ?? null,
+        };
+      }
+    });
 
-  res.json(cases);
+    res.json(cases);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'Failed to load cases' });
+  }
 };
 
 const getOfficerPatients = async (req, res) => {
-const cases = await Case.find({ officer: req.user._id, archived: false }).select('patient');
-  res.json(cases.map(c => c.patient));
+  try {
+    const cases = await Case.find({ officer: req.user._id, archived: false }).select('patient');
+    res.json(cases.map((c) => c.patient));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load patients' });
+  }
 };
 
 const getOfficerCases = async (req, res) => {
-const cases = await Case.find({ officer: req.user._id, archived: false })
-    .populate('healthFacility')
-    .populate('officer', 'fullName')
-    .populate('caseType');
-
-  res.json(cases);
+  try {
+    const cases = await Case.find({ officer: req.user._id, archived: false })
+      .populate('healthFacility')
+      .populate('officer', 'fullName')
+      .populate('caseType')
+      .populate('community');
+    res.json(cases);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load officer cases' });
+  }
 };
 
 const deleteCase = async (req, res) => {
-  const caseId = req.params.id;
+  try {
+    const caseId = req.params.id;
 
-  const existingCase = await Case.findById(caseId);
-  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+    const existingCase = await Case.findById(caseId);
+    if (!existingCase) return res.status(404).json({ message: 'Case not found' });
 
-  if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Unauthorized' });
+    if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    await Case.findByIdAndDelete(caseId);
+    res.json({ message: 'Case deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to delete case' });
   }
-
-  await Case.findByIdAndDelete(caseId);
-  res.json({ message: 'Case deleted successfully' });
 };
 
 const editCaseDetails = async (req, res) => {
-  const caseId = req.params.id;
-  const { caseType, community, patient, status } = req.body;
+  try {
+    const caseId = req.params.id;
+    const { caseType, community, location, patient, status, useFacilityCommunity } = req.body;
 
-  const existing = await Case.findById(caseId);
-  if (!existing) return res.status(404).json({ message: 'Case not found' });
+    const existing = await Case.findById(caseId);
+    if (!existing) return res.status(404).json({ message: 'Case not found' });
 
-  if (!existing.officer.equals(req.user._id) && req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Unauthorized' });
-  }
-
-  // ✅ Update case type
-  if (caseType) {
-    const type = await CaseType.findById(caseType);
-    if (!type) return res.status(400).json({ message: 'Invalid case type' });
-    existing.caseType = type._id;
-  }
-
-  // ✅ Update community
-  if (community !== undefined) {
-    existing.community = typeof community === 'string' ? community.trim() : existing.community;
-  }
-
-  // ✅ Update case status
-  if (status && ['suspected', 'confirmed', 'not a case'].includes(status)) {
-    existing.status = status;
-  }
-
-  // ✅ Update patient fields
-  if (patient) {
-    if (patient.name) existing.patient.name = patient.name;
-    if (patient.age != null) existing.patient.age = patient.age;
-    if (patient.gender) existing.patient.gender = patient.gender;
-    if (patient.phone) existing.patient.phone = patient.phone;
-
-    if (patient.status && ['Recovered', 'Ongoing treatment', 'Deceased'].includes(patient.status)) {
-      existing.patient.status = patient.status;
+    if (!existing.officer.equals(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized' });
     }
+
+    // Case type
+    if (caseType) {
+      const type = await CaseType.findById(caseType);
+      if (!type) return res.status(400).json({ message: 'Invalid case type' });
+      existing.caseType = type._id;
+    }
+
+    // Community (string name) + optional location names
+    if (community !== undefined || useFacilityCommunity === true) {
+      // Load officer facility for fallback path
+      const officer = await User.findById(req.user._id).select('healthFacility');
+      const facility = officer
+        ? await HealthFacility.findById(officer.healthFacility).select(
+            'region district subDistrict community'
+          )
+        : null;
+      if (!facility) return res.status(404).json({ message: 'Officer facility not found' });
+
+      if (useFacilityCommunity === true) {
+        existing.community = facility.community;
+      } else {
+        const communityId = await resolveCommunityId({
+          communityName: typeof community === 'string' ? community : '',
+          location,
+          fallbackFacility: facility,
+        });
+        existing.community = communityId;
+      }
+    }
+
+    // Status
+    if (status && ['suspected', 'confirmed', 'not a case'].includes(status)) {
+      existing.status = status;
+    }
+
+    // Patient fields
+    if (patient) {
+      if (patient.name) existing.patient.name = patient.name;
+      if (patient.age != null) existing.patient.age = patient.age;
+      if (patient.gender) existing.patient.gender = patient.gender;
+      if (patient.phone) existing.patient.phone = patient.phone;
+      if (patient.status && ['Recovered', 'Ongoing treatment', 'Deceased'].includes(patient.status)) {
+        existing.patient.status = patient.status;
+      }
+    }
+
+    await existing.save();
+
+    const populated = await Case.findById(caseId)
+      .populate('officer', 'fullName')
+      .populate('healthFacility')
+      .populate('caseType')
+      .populate('community');
+    res.json(populated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to edit case' });
   }
-
-  await existing.save();
-
-  const populated = await Case.findById(caseId)
-    .populate('officer', 'fullName')
-    .populate('healthFacility')
-    .populate('caseType');
-
-  res.json(populated);
 };
 
 const archiveCase = async (req, res) => {
-  const caseId = req.params.id;
+  try {
+    const caseId = req.params.id;
 
-  const existingCase = await Case.findById(caseId);
-  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+    const existingCase = await Case.findById(caseId);
+    if (!existingCase) return res.status(404).json({ message: 'Case not found' });
 
-  if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Unauthorized' });
+    if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    existingCase.archived = true;
+    await existingCase.save();
+
+    res.json({ message: 'Case archived successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to archive case' });
   }
-
-  existingCase.archived = true;
-  await existingCase.save();
-
-  res.json({ message: 'Case archived successfully' });
 };
 
 const getArchivedCases = async (req, res) => {
-  const archived = await Case.find({ archived: true })
-    .populate('officer', 'fullName')
-    .populate('healthFacility')
-    .populate('caseType');
-
-  res.json(archived);
+  try {
+    const archived = await Case.find({ archived: true })
+      .populate('officer', 'fullName')
+      .populate('healthFacility')
+      .populate('caseType')
+      .populate('community');
+    res.json(archived);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load archived cases' });
+  }
 };
 
 const unarchiveCase = async (req, res) => {
-  const caseId = req.params.id;
+  try {
+    const caseId = req.params.id;
 
-  const existingCase = await Case.findById(caseId);
-  if (!existingCase) return res.status(404).json({ message: 'Case not found' });
+    const existingCase = await Case.findById(caseId);
+    if (!existingCase) return res.status(404).json({ message: 'Case not found' });
 
-  if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Unauthorized' });
+    if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    existingCase.archived = false;
+    await existingCase.save();
+
+    res.json({ message: 'Case unarchived successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to unarchive case' });
   }
-
-  existingCase.archived = false;
-  await existingCase.save();
-
-  res.json({ message: 'Case unarchived successfully' });
 };
-
-
-
-
 
 module.exports = {
   createCase,
@@ -209,10 +354,9 @@ module.exports = {
   getCases,
   getOfficerPatients,
   getOfficerCases,
-  deleteCase, 
+  deleteCase,
   editCaseDetails,
   archiveCase,
   getArchivedCases,
-  unarchiveCase
+  unarchiveCase,
 };
-
