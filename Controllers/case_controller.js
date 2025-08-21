@@ -149,6 +149,7 @@ const getCases = async (req, res) => {
         : { officer: req.user._id, archived: false };
 
     const cases = await Case.find(query)
+      .populate('officer', 'fullName')
       .populate('caseType', 'name')
       .populate({
         path: 'healthFacility',
