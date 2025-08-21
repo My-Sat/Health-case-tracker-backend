@@ -141,7 +141,14 @@ const updateCaseStatus = async (req, res) => {
 
 const getCases = async (req, res) => {
   try {
-    const cases = await Case.find({ officer: req.user._id, archived: false })
+    // Admins: see all non-archived cases
+    // Officers: only their own non-archived cases
+    const query =
+      req.user?.role === 'admin'
+        ? { archived: false }
+        : { officer: req.user._id, archived: false };
+
+    const cases = await Case.find(query)
       .populate('caseType', 'name')
       .populate({
         path: 'healthFacility',
@@ -153,7 +160,7 @@ const getCases = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate('community', 'name') // patient community if outside facility community
+      .populate('community', 'name')
       .sort({ timeline: -1 })
       .lean();
 
