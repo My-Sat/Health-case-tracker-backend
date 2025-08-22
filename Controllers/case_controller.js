@@ -198,10 +198,35 @@ const getOfficerPatients = async (req, res) => {
 const getOfficerCases = async (req, res) => {
   try {
     const cases = await Case.find({ officer: req.user._id, archived: false })
-      .populate('healthFacility')
       .populate('officer', 'fullName')
-      .populate('caseType')
-      .populate('community');
+      .populate('caseType', 'name')
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community', 'name')
+      .sort({ timeline: -1 })
+      .lean();
+
+    // Make sure we always return readable strings under healthFacility.location
+    cases.forEach((c) => {
+      const hf = c.healthFacility;
+      if (!hf) return;
+      if (!hf.location) hf.location = {};
+      hf.location = {
+        region: hf.region?.name ?? hf.region ?? null,
+        district: hf.district?.name ?? hf.district ?? null,
+        subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+        community: hf.community?.name ?? hf.community ?? null,
+      };
+    });
+
     res.json(cases);
   } catch (err) {
     console.error(err);
