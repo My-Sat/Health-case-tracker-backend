@@ -165,17 +165,6 @@ const getCommunities = async (req, res) => {
 };
 
 // ---------- mutations ----------
-const deleteFacility = async (req, res) => {
-  const { id } = req.params;
-
-  const facility = await HealthFacility.findById(id);
-  if (!facility) return res.status(404).json({ message: 'Facility not found' });
-
-  await Case.deleteMany({ healthFacility: facility._id });
-  await facility.deleteOne();
-  res.json({ message: 'Facility and related cases deleted' });
-};
-
 const updateFacility = async (req, res) => {
   const { id } = req.params;
   const { name, location } = req.body;
@@ -284,7 +273,6 @@ module.exports = {
   getSubDistricts,
   getFacilitiesUnder,
   getCommunities,
-  deleteFacility,
   updateFacility,
   archiveFacility,
   getArchivedFacilities,

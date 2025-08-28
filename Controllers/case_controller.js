@@ -185,6 +185,46 @@ const getCases = async (req, res) => {
   }
 };
 
+const getAllCasesForOfficers = async (req, res) => {
+  try {
+    const cases = await Case.find({ archived: false })
+      .populate('officer', 'fullName')
+      .populate('caseType', 'name')
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community', 'name')
+      .sort({ timeline: -1 })
+      .lean();
+
+    // Back-compat: synthesize healthFacility.location with names (not ids)
+    cases.forEach((c) => {
+      const hf = c.healthFacility;
+      if (hf && !hf.location) {
+        hf.location = {
+          region: hf.region?.name ?? hf.region ?? null,
+          district: hf.district?.name ?? hf.district ?? null,
+          subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+          community: hf.community?.name ?? hf.community ?? null,
+        };
+      }
+    });
+
+    res.json(cases);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'Failed to load all cases' });
+  }
+};
+
+
 const getOfficerPatients = async (req, res) => {
   try {
     const cases = await Case.find({ officer: req.user._id, archived: false }).select('patient');
@@ -231,25 +271,6 @@ const getOfficerCases = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to load officer cases' });
-  }
-};
-
-const deleteCase = async (req, res) => {
-  try {
-    const caseId = req.params.id;
-
-    const existingCase = await Case.findById(caseId);
-    if (!existingCase) return res.status(404).json({ message: 'Case not found' });
-
-    if (!existingCase.officer.equals(req.user._id) && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Unauthorized' });
-    }
-
-    await Case.findByIdAndDelete(caseId);
-    res.json({ message: 'Case deleted successfully' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to delete case' });
   }
 };
 
@@ -385,9 +406,9 @@ module.exports = {
   createCase,
   updateCaseStatus,
   getCases,
+  getAllCasesForOfficers,
   getOfficerPatients,
   getOfficerCases,
-  deleteCase,
   editCaseDetails,
   archiveCase,
   getArchivedCases,

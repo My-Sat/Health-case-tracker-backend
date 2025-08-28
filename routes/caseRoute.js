@@ -4,9 +4,9 @@ const {
   createCase,
   updateCaseStatus,
   getCases,
+  getAllCasesForOfficers,
   getOfficerPatients,
   getOfficerCases,
-  deleteCase,
   editCaseDetails, 
   archiveCase,
   getArchivedCases,
@@ -18,9 +18,9 @@ const { protect } = require('../middlewares/auth_middleware');
 router.post('/', protect, createCase);
 router.put('/:id/status', protect, updateCaseStatus);
 router.get('/', protect, getCases);
+router.get('/all-officers', protect, getAllCasesForOfficers);
 router.get('/my-patients', protect, getOfficerPatients);
 router.get('/my-cases', protect, getOfficerCases);
-router.delete('/:id', protect, deleteCase);
 router.put('/:id/edit', protect, editCaseDetails);
 router.patch('/:id/archive', protect, archiveCase);
 router.get('/archived', protect, getArchivedCases);

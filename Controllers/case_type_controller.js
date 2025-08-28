@@ -15,17 +15,6 @@ const getCaseTypes = async (_, res) => {
   res.json(types);
 };
 
-const deleteCaseType = async (req, res) => {
-  const { id } = req.params;
-  const ct = await CaseType.findById(id);
-  if (!ct) return res.status(404).json({ message: 'Case type not found' });
-
-  await Case.deleteMany({ caseType: ct._id });
-  await ct.deleteOne();
-
-  res.json({ message: 'Case type and associated cases deleted' });
-};
-
 const updateCaseType = async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
@@ -78,7 +67,6 @@ const getArchivedCaseTypes = async (req, res) => {
 
 module.exports = { createCaseType, 
   getCaseTypes, 
-  deleteCaseType, 
   updateCaseType, 
   archiveCaseType, 
   unarchiveCaseType, 

@@ -10,7 +10,6 @@ const {
   getSubDistricts,
   getFacilitiesUnder,
   getCommunities,
-  deleteFacility,
   updateFacility,
   archiveFacility,
   getArchivedFacilities,
@@ -32,7 +31,6 @@ router.get('/under', getFacilitiesUnder);
 router.get('/communities', getCommunities);
 
 router.put('/:id', protect, adminOnly, updateFacility);
-router.delete('/:id', protect, adminOnly, deleteFacility);
 router.patch('/:id', protect, adminOnly, patchFacility);
 router.patch('/:id/archive', protect, adminOnly, archiveFacility);
 router.get('/archived', protect, adminOnly, getArchivedFacilities);
