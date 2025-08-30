@@ -402,6 +402,161 @@ const unarchiveCase = async (req, res) => {
   }
 };
 
+const getCaseTypeSummary = async (req, res) => {
+  try {
+    // Only include actually "reported" cases (suspected or confirmed), ignore archived
+    const pipeline = [
+      { $match: { archived: false, status: { $in: ['suspected', 'confirmed'] } } },
+      {
+        $group: {
+          _id: {
+            caseType: '$caseType',
+            status: '$status',
+            patientStatus: '$patient.status',
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.caseType',
+          total: { $sum: '$count' },
+          confirmed_total: {
+            $sum: { $cond: [{ $eq: ['$_id.status', 'confirmed'] }, '$count', 0] },
+          },
+          suspected_total: {
+            $sum: { $cond: [{ $eq: ['$_id.status', 'suspected'] }, '$count', 0] },
+          },
+
+          // Confirmed breakdown
+          confirmed_recovered: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'confirmed'] },
+                    { $eq: ['$_id.patientStatus', 'Recovered'] },
+                  ],
+                },
+                '$count',
+                0,
+              ],
+            },
+          },
+          confirmed_ongoingTreatment: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'confirmed'] },
+                    { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
+                  ],
+                },
+                '$count',
+                0,
+              ],
+            },
+          },
+          confirmed_deceased: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'confirmed'] },
+                    { $eq: ['$_id.patientStatus', 'Deceased'] },
+                  ],
+                },
+                '$count',
+                0,
+              ],
+            },
+          },
+
+          // Suspected breakdown
+          suspected_recovered: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'suspected'] },
+                    { $eq: ['$_id.patientStatus', 'Recovered'] },
+                  ],
+                },
+                '$count',
+                0,
+              ],
+            },
+          },
+          suspected_ongoingTreatment: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'suspected'] },
+                    { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
+                  ],
+                },
+                '$count',
+                0,
+              ],
+            },
+          },
+          suspected_deceased: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'suspected'] },
+                    { $eq: ['$_id.patientStatus', 'Deceased'] },
+                  ],
+                },
+                '$count',
+                0,
+              ],
+            },
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: 'casetypes', // pluralized collection for CaseType
+          localField: '_id',
+          foreignField: '_id',
+          as: 'caseType',
+        },
+      },
+      { $unwind: '$caseType' },
+      {
+        $project: {
+          _id: 0,
+          caseTypeId: '$caseType._id',
+          name: '$caseType.name',
+          total: 1,
+          confirmed: {
+            total: '$confirmed_total',
+            recovered: '$confirmed_recovered',
+            ongoingTreatment: '$confirmed_ongoingTreatment',
+            deceased: '$confirmed_deceased',
+          },
+          suspected: {
+            total: '$suspected_total',
+            recovered: '$suspected_recovered',
+            ongoingTreatment: '$suspected_ongoingTreatment',
+            deceased: '$suspected_deceased',
+          },
+        },
+      },
+      { $sort: { name: 1 } },
+    ];
+
+    const results = await Case.aggregate(pipeline);
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load case type summary' });
+  }
+};
+
 module.exports = {
   createCase,
   updateCaseStatus,
@@ -413,4 +568,5 @@ module.exports = {
   archiveCase,
   getArchivedCases,
   unarchiveCase,
+  getCaseTypeSummary,
 };

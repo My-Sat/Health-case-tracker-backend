@@ -10,7 +10,8 @@ const {
   editCaseDetails, 
   archiveCase,
   getArchivedCases,
-  unarchiveCase
+  unarchiveCase,
+  getCaseTypeSummary,
 } = require('../Controllers/case_controller');
 
 const { protect } = require('../middlewares/auth_middleware');
@@ -20,6 +21,7 @@ router.put('/:id/status', protect, updateCaseStatus);
 router.get('/', protect, getCases);
 router.get('/all-officers', protect, getAllCasesForOfficers);
 router.get('/my-patients', protect, getOfficerPatients);
+router.get('/type-summary', protect, getCaseTypeSummary);
 router.get('/my-cases', protect, getOfficerCases);
 router.put('/:id/edit', protect, editCaseDetails);
 router.patch('/:id/archive', protect, archiveCase);
