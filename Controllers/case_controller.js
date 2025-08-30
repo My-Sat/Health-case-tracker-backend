@@ -3,6 +3,7 @@ const Case = require('../models/Case');
 const User = require('../models/User');
 const CaseType = require('../models/case_type');
 const HealthFacility = require('../models/HealthFacility');
+const mongoose = require('mongoose');
 
 const {
   findOrCreateRegion,
@@ -404,156 +405,293 @@ const unarchiveCase = async (req, res) => {
 
 const getCaseTypeSummary = async (req, res) => {
   try {
-    // Only include actually "reported" cases (suspected or confirmed), ignore archived
-    const pipeline = [
-      { $match: { archived: false, status: { $in: ['suspected', 'confirmed'] } } },
-      {
-        $group: {
-          _id: {
-            caseType: '$caseType',
-            status: '$status',
-            patientStatus: '$patient.status',
-          },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $group: {
-          _id: '$_id.caseType',
-          total: { $sum: '$count' },
-          confirmed_total: {
-            $sum: { $cond: [{ $eq: ['$_id.status', 'confirmed'] }, '$count', 0] },
-          },
-          suspected_total: {
-            $sum: { $cond: [{ $eq: ['$_id.status', 'suspected'] }, '$count', 0] },
-          },
+    const { q, region, district, subDistrict, community, facility } = req.query;
 
-          // Confirmed breakdown
-          confirmed_recovered: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$_id.status', 'confirmed'] },
-                    { $eq: ['$_id.patientStatus', 'Recovered'] },
-                  ],
-                },
-                '$count',
-                0,
-              ],
-            },
-          },
-          confirmed_ongoingTreatment: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$_id.status', 'confirmed'] },
-                    { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
-                  ],
-                },
-                '$count',
-                0,
-              ],
-            },
-          },
-          confirmed_deceased: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$_id.status', 'confirmed'] },
-                    { $eq: ['$_id.patientStatus', 'Deceased'] },
-                  ],
-                },
-                '$count',
-                0,
-              ],
-            },
-          },
+    const pipeline = [];
 
-          // Suspected breakdown
-          suspected_recovered: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$_id.status', 'suspected'] },
-                    { $eq: ['$_id.patientStatus', 'Recovered'] },
-                  ],
-                },
-                '$count',
-                0,
-              ],
-            },
-          },
-          suspected_ongoingTreatment: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$_id.status', 'suspected'] },
-                    { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
-                  ],
-                },
-                '$count',
-                0,
-              ],
-            },
-          },
-          suspected_deceased: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$_id.status', 'suspected'] },
-                    { $eq: ['$_id.patientStatus', 'Deceased'] },
-                  ],
-                },
-                '$count',
-                0,
-              ],
-            },
+    // only non-archived and only suspected/confirmed (same as before)
+    pipeline.push({
+      $match: {
+        archived: false,
+        status: { $in: ['suspected', 'confirmed'] },
+      },
+    });
+
+    // join healthFacility & its location pieces so we can filter by names or ids
+    pipeline.push({
+      $lookup: {
+        from: 'healthfacilities',
+        localField: 'healthFacility',
+        foreignField: '_id',
+        as: 'hf',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$hf', preserveNullAndEmptyArrays: true } });
+
+    pipeline.push({
+      $lookup: {
+        from: 'regions',
+        localField: 'hf.region',
+        foreignField: '_id',
+        as: 'region',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$region', preserveNullAndEmptyArrays: true } });
+
+    pipeline.push({
+      $lookup: {
+        from: 'districts',
+        localField: 'hf.district',
+        foreignField: '_id',
+        as: 'district',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$district', preserveNullAndEmptyArrays: true } });
+
+    pipeline.push({
+      $lookup: {
+        from: 'subdistricts',
+        localField: 'hf.subDistrict',
+        foreignField: '_id',
+        as: 'subDistrict',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$subDistrict', preserveNullAndEmptyArrays: true } });
+
+    // community attached to the health facility
+    pipeline.push({
+      $lookup: {
+        from: 'communities',
+        localField: 'hf.community',
+        foreignField: '_id',
+        as: 'hfCommunity',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$hfCommunity', preserveNullAndEmptyArrays: true } });
+
+    // community referenced on the case itself (cases may have their own community)
+    pipeline.push({
+      $lookup: {
+        from: 'communities',
+        localField: 'community',
+        foreignField: '_id',
+        as: 'caseCommunity',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$caseCommunity', preserveNullAndEmptyArrays: true } });
+
+    // bring in casetype (we'll allow q search against name)
+    pipeline.push({
+      $lookup: {
+        from: 'casetypes',
+        localField: 'caseType',
+        foreignField: '_id',
+        as: 'caseType',
+      },
+    });
+    pipeline.push({ $unwind: { path: '$caseType', preserveNullAndEmptyArrays: true } });
+
+    // Build filter match object based on given query parameters.
+    const match = {};
+
+    if (facility) {
+      if (mongoose.Types.ObjectId.isValid(facility)) {
+        match['hf._id'] = mongoose.Types.ObjectId(facility);
+      } else {
+        match['hf.name'] = { $regex: facility, $options: 'i' };
+      }
+    }
+
+    if (region) {
+      if (mongoose.Types.ObjectId.isValid(region)) {
+        match['region._id'] = mongoose.Types.ObjectId(region);
+      } else {
+        match['region.name'] = { $regex: region, $options: 'i' };
+      }
+    }
+
+    if (district) {
+      if (mongoose.Types.ObjectId.isValid(district)) {
+        match['district._id'] = mongoose.Types.ObjectId(district);
+      } else {
+        match['district.name'] = { $regex: district, $options: 'i' };
+      }
+    }
+
+    if (subDistrict) {
+      if (mongoose.Types.ObjectId.isValid(subDistrict)) {
+        match['subDistrict._id'] = mongoose.Types.ObjectId(subDistrict);
+      } else {
+        match['subDistrict.name'] = { $regex: subDistrict, $options: 'i' };
+      }
+    }
+
+    if (community) {
+      // community may be either the case.community or the hf.community — accept either
+      const communityMatch = [];
+      if (mongoose.Types.ObjectId.isValid(community)) {
+        communityMatch.push({ 'caseCommunity._id': mongoose.Types.ObjectId(community) });
+        communityMatch.push({ 'hfCommunity._id': mongoose.Types.ObjectId(community) });
+      } else {
+        communityMatch.push({ 'caseCommunity.name': { $regex: community, $options: 'i' } });
+        communityMatch.push({ 'hfCommunity.name': { $regex: community, $options: 'i' } });
+      }
+      // if there are already other matches, combine using $and; otherwise just add $or
+      match['$or'] = communityMatch;
+    }
+
+    if (q) {
+      match['caseType.name'] = { $regex: q, $options: 'i' };
+    }
+
+    if (Object.keys(match).length > 0) {
+      pipeline.push({ $match: match });
+    }
+
+    // group by casetype + status + patient.status to count combinations
+    pipeline.push({
+      $group: {
+        _id: {
+          caseType: '$caseType._id',
+          status: '$status',
+          patientStatus: '$patient.status',
+        },
+        count: { $sum: 1 },
+      },
+    });
+
+    // roll up per caseType into totals and breakdowns
+    pipeline.push({
+      $group: {
+        _id: '$_id.caseType',
+        total: { $sum: '$count' },
+        confirmed_total: {
+          $sum: { $cond: [{ $eq: ['$_id.status', 'confirmed'] }, '$count', 0] },
+        },
+        suspected_total: {
+          $sum: { $cond: [{ $eq: ['$_id.status', 'suspected'] }, '$count', 0] },
+        },
+
+        confirmed_recovered: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$_id.status', 'confirmed'] },
+                  { $eq: ['$_id.patientStatus', 'Recovered'] },
+                ],
+              },
+              '$count',
+              0,
+            ],
           },
         },
-      },
-      {
-        $lookup: {
-          from: 'casetypes', // pluralized collection for CaseType
-          localField: '_id',
-          foreignField: '_id',
-          as: 'caseType',
-        },
-      },
-      { $unwind: '$caseType' },
-      {
-        $project: {
-          _id: 0,
-          caseTypeId: '$caseType._id',
-          name: '$caseType.name',
-          total: 1,
-          confirmed: {
-            total: '$confirmed_total',
-            recovered: '$confirmed_recovered',
-            ongoingTreatment: '$confirmed_ongoingTreatment',
-            deceased: '$confirmed_deceased',
-          },
-          suspected: {
-            total: '$suspected_total',
-            recovered: '$suspected_recovered',
-            ongoingTreatment: '$suspected_ongoingTreatment',
-            deceased: '$suspected_deceased',
+        confirmed_ongoingTreatment: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$_id.status', 'confirmed'] },
+                  { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
+                ],
+              },
+              '$count',
+              0,
+            ],
           },
         },
+        confirmed_deceased: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$_id.status', 'confirmed'] },
+                  { $eq: ['$_id.patientStatus', 'Deceased'] },
+                ],
+              },
+              '$count',
+              0,
+            ],
+          },
+        },
+
+        suspected_recovered: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$_id.status', 'suspected'] },
+                  { $eq: ['$_id.patientStatus', 'Recovered'] },
+                ],
+              },
+              '$count',
+              0,
+            ],
+          },
+        },
+        suspected_ongoingTreatment: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$_id.status', 'suspected'] },
+                  { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
+                ],
+              },
+              '$count',
+              0,
+            ],
+          },
+        },
+        suspected_deceased: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$_id.status', 'suspected'] },
+                  { $eq: ['$_id.patientStatus', 'Deceased'] },
+                ],
+              },
+              '$count',
+              0,
+            ],
+          },
+        },
+
+        // capture casetype name and id for projection
+        caseTypeName: { $first: '$caseType.name' },
+        caseTypeObjId: { $first: '$caseType._id' },
       },
-      { $sort: { name: 1 } },
-    ];
+    });
+
+    pipeline.push({
+      $project: {
+        _id: 0,
+        caseTypeId: '$caseTypeObjId',
+        name: '$caseTypeName',
+        total: 1,
+        confirmed: {
+          total: '$confirmed_total',
+          recovered: '$confirmed_recovered',
+          ongoingTreatment: '$confirmed_ongoingTreatment',
+          deceased: '$confirmed_deceased',
+        },
+        suspected: {
+          total: '$suspected_total',
+          recovered: '$suspected_recovered',
+          ongoingTreatment: '$suspected_ongoingTreatment',
+          deceased: '$suspected_deceased',
+        },
+      },
+    });
+
+    pipeline.push({ $sort: { name: 1 } });
 
     const results = await Case.aggregate(pipeline);
-    res.json(results);
+    return res.json(results);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to load case type summary' });
+    console.error('getCaseTypeSummary error', err);
+    return res.status(500).json({ message: 'Failed to load case type summary' });
   }
 };
 
