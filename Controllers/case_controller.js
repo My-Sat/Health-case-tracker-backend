@@ -419,7 +419,7 @@ const getCaseTypeSummary = async (req, res) => {
     // --- caseType filter (id or name)
     if (caseType && caseType !== 'all') {
       if (isObjectId(caseType)) {
-        match.caseType = mongoose.Types.ObjectId(caseType);
+        match.caseType = new mongoose.Types.ObjectId(caseType);
       } else {
         const ct = await CaseType.findOne({ name: caseType });
         if (!ct) return res.json([]); // no matching case type -> empty result
@@ -435,7 +435,7 @@ const getCaseTypeSummary = async (req, res) => {
 
     if (region) {
       if (isObjectId(region)) {
-        regionId = mongoose.Types.ObjectId(region);
+        regionId = new mongoose.Types.ObjectId(region);
       } else {
         const regionDoc = await Region.findOne({ name: region });
         if (!regionDoc) return res.json([]); // region name not found
@@ -446,7 +446,7 @@ const getCaseTypeSummary = async (req, res) => {
 
     if (district) {
       if (isObjectId(district)) {
-        districtId = mongoose.Types.ObjectId(district);
+        districtId = new mongoose.Types.ObjectId(district);
       } else {
         // prefer district scoped to region if we have regionId
         const q = regionId ? { name: district, region: regionId } : { name: district };
@@ -459,7 +459,7 @@ const getCaseTypeSummary = async (req, res) => {
 
     if (subDistrict) {
       if (isObjectId(subDistrict)) {
-        subDistrictId = mongoose.Types.ObjectId(subDistrict);
+        subDistrictId = new mongoose.Types.ObjectId(subDistrict);
       } else {
         // prefer subDistrict scoped to district if we have districtId
         const q = districtId ? { name: subDistrict, district: districtId } : { name: subDistrict };
@@ -483,7 +483,7 @@ const getCaseTypeSummary = async (req, res) => {
     // --- community filter (case.community) (id or name)
     if (community) {
       if (isObjectId(community)) {
-        match.community = mongoose.Types.ObjectId(community);
+        match.community = new mongoose.Types.ObjectId(community);
       } else {
         // attempt to resolve community by name with a sensible parent context:
         // prefer subDistrictId > districtId; if neither available, do a global findOne by name.
