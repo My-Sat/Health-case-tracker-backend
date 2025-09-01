@@ -4,6 +4,9 @@ const User = require('../models/User');
 const CaseType = require('../models/case_type');
 const HealthFacility = require('../models/HealthFacility');
 const mongoose = require('mongoose');
+const Region = require('../models/Region');
+const District = require('../models/District');
+const Community = require('../models/Community');
 
 const {
   findOrCreateRegion,
@@ -11,6 +14,10 @@ const {
   findOrCreateSubDistrict,
   findOrCreateCommunity,
 } = require('../utilities/location');
+
+function isObjectIdString(v) {
+  return typeof v === 'string' && mongoose.Types.ObjectId.isValid(v);
+}
 
 // Utility: resolve/create a Community ID based on (optional) location + name
 async function resolveCommunityId({ communityName, location, fallbackFacility }) {
@@ -405,9 +412,104 @@ const unarchiveCase = async (req, res) => {
 
 const getCaseTypeSummary = async (req, res) => {
   try {
-    // Only include actually "reported" cases (suspected or confirmed), ignore archived
+    const { caseType, region, district, community } = req.query;
+
+    // base match: only active (non-archived) and statuses we want
+    const match = {
+      archived: false,
+      status: { $in: ['suspected', 'confirmed'] },
+    };
+
+    // handle caseType (id or name)
+    if (caseType && caseType !== 'all') {
+      if (isObjectIdString(caseType)) {
+        match.caseType = mongoose.Types.ObjectId(caseType);
+      } else {
+        const ct = await CaseType.findOne({ name: caseType });
+        if (!ct) {
+          return res.json([]); // nothing matches
+        }
+        match.caseType = ct._id;
+      }
+    }
+
+    // Resolve facility-level filters (region/district). We'll collect facility ids matching them.
+    let facilityIds = null; // null => no facility constraint
+    if (region || district) {
+      const facilityFilter = {};
+
+      // region
+      if (region) {
+        if (isObjectIdString(region)) {
+          facilityFilter.region = mongoose.Types.ObjectId(region);
+        } else {
+          const regionDoc = await Region.findOne({ name: region });
+          if (!regionDoc) return res.json([]); // region not found
+          facilityFilter.region = regionDoc._id;
+        }
+      }
+
+      // district
+      if (district) {
+        if (!facilityFilter.region && !isObjectIdString(district)) {
+          // We need region context to reliably resolve district by name; try by id fallback
+          // attempt to find district by name without region only if id passed or unique
+          // but best effort: try direct lookup
+          const maybeDistrict = await District.findOne({ name: district });
+          if (!maybeDistrict) return res.json([]);
+          facilityFilter.district = maybeDistrict._id;
+        } else if (isObjectIdString(district)) {
+          facilityFilter.district = mongoose.Types.ObjectId(district);
+        } else {
+          // district as name + region context present
+          const districtDoc = await District.findOne({ name: district, region: facilityFilter.region });
+          if (!districtDoc) return res.json([]);
+          facilityFilter.district = districtDoc._id;
+        }
+      }
+
+      // Query HealthFacility to get matching ids
+      facilityIds = await HealthFacility.find(facilityFilter).distinct('_id');
+      if (!facilityIds || facilityIds.length === 0) {
+        // no facilities match -> no cases
+        return res.json([]);
+      }
+    }
+
+    // Resolve community if provided (id or name)
+    let communityId = null;
+    if (community) {
+      if (isObjectIdString(community)) {
+        communityId = mongoose.Types.ObjectId(community);
+      } else {
+        // attempt to find by name (best-effort)
+        const communityDoc = await Community.findOne({ name: community });
+        if (!communityDoc) {
+          return res.json([]);
+        }
+        communityId = communityDoc._id;
+      }
+    }
+
+    // Apply facility/community constraints to match:
+    if (communityId) {
+      // If facility filter present, require both community and facility (AND)
+      if (facilityIds && facilityIds.length > 0) {
+        match.$and = [
+          { community: communityId },
+          { healthFacility: { $in: facilityIds.map((id) => mongoose.Types.ObjectId(id)) } },
+        ];
+      } else {
+        match.community = communityId;
+      }
+    } else if (facilityIds && facilityIds.length > 0) {
+      match.healthFacility = { $in: facilityIds.map((id) => mongoose.Types.ObjectId(id)) };
+    }
+
+    // Aggregation pipeline (same shape as previous summary, but starting with our dynamic match)
+    const caseTypeCollection = CaseType.collection.name; // exact collection name
     const pipeline = [
-      { $match: { archived: false, status: { $in: ['suspected', 'confirmed'] } } },
+      { $match: match },
       {
         $group: {
           _id: {
@@ -428,8 +530,6 @@ const getCaseTypeSummary = async (req, res) => {
           suspected_total: {
             $sum: { $cond: [{ $eq: ['$_id.status', 'suspected'] }, '$count', 0] },
           },
-
-          // Confirmed breakdown
           confirmed_recovered: {
             $sum: {
               $cond: [
@@ -472,8 +572,6 @@ const getCaseTypeSummary = async (req, res) => {
               ],
             },
           },
-
-          // Suspected breakdown
           suspected_recovered: {
             $sum: {
               $cond: [
@@ -520,7 +618,7 @@ const getCaseTypeSummary = async (req, res) => {
       },
       {
         $lookup: {
-          from: 'casetypes', // pluralized collection for CaseType
+          from: caseTypeCollection,
           localField: '_id',
           foreignField: '_id',
           as: 'caseType',
@@ -551,12 +649,13 @@ const getCaseTypeSummary = async (req, res) => {
     ];
 
     const results = await Case.aggregate(pipeline);
-    res.json(results);
+    return res.json(results);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to load case type summary' });
+    console.error('getCaseTypeSummary error:', err);
+    return res.status(500).json({ message: 'Failed to load case type summary' });
   }
 };
+
 module.exports = {
   createCase,
   updateCaseStatus,
