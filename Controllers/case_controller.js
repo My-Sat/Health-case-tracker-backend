@@ -6,7 +6,6 @@ const HealthFacility = require('../models/HealthFacility');
 const mongoose = require('mongoose');
 const Region = require('../models/Region');
 const District = require('../models/District');
-const SubDistrict = require('../models/SubDistrict');
 const Community = require('../models/Community');
 
 const {
@@ -16,7 +15,9 @@ const {
   findOrCreateCommunity,
 } = require('../utilities/location');
 
-const isObjectId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isValid(v);
+function isObjectIdString(v) {
+  return typeof v === 'string' && mongoose.Types.ObjectId.isValid(v);
+}
 
 // Utility: resolve/create a Community ID based on (optional) location + name
 async function resolveCommunityId({ communityName, location, fallbackFacility }) {
@@ -411,95 +412,102 @@ const unarchiveCase = async (req, res) => {
 
 const getCaseTypeSummary = async (req, res) => {
   try {
-    const { caseType, region, district, subDistrict, community } = req.query;
+    const { caseType, region, district, community } = req.query;
 
-    // Base match: ignore archived cases and only include suspected/confirmed
-    const match = { archived: false, status: { $in: ['suspected', 'confirmed'] } };
+    // base match: only active (non-archived) and statuses we want
+    const match = {
+      archived: false,
+      status: { $in: ['suspected', 'confirmed'] },
+    };
 
-    // --- caseType filter (id or name)
+    // handle caseType (id or name)
     if (caseType && caseType !== 'all') {
-      if (isObjectId(caseType)) {
+      if (isObjectIdString(caseType)) {
         match.caseType = new mongoose.Types.ObjectId(caseType);
       } else {
         const ct = await CaseType.findOne({ name: caseType });
-        if (!ct) return res.json([]); // no matching case type -> empty result
+        if (!ct) {
+          return res.json([]); // nothing matches
+        }
         match.caseType = ct._id;
       }
     }
 
-    // --- resolve facility-level filters (region/district/subDistrict) to find matching facility ids
-    const facilityFilter = {};
-    let regionId = null;
-    let districtId = null;
-    let subDistrictId = null;
+    // Resolve facility-level filters (region/district). We'll collect facility ids matching them.
+    let facilityIds = null; // null => no facility constraint
+    if (region || district) {
+      const facilityFilter = {};
 
-    if (region) {
-      if (isObjectId(region)) {
-        regionId = new mongoose.Types.ObjectId(region);
-      } else {
-        const regionDoc = await Region.findOne({ name: region });
-        if (!regionDoc) return res.json([]); // region name not found
-        regionId = regionDoc._id;
+      // region
+      if (region) {
+        if (isObjectIdString(region)) {
+          facilityFilter.region = new mongoose.Types.ObjectId(region);
+        } else {
+          const regionDoc = await Region.findOne({ name: region });
+          if (!regionDoc) return res.json([]); // region not found
+          facilityFilter.region = regionDoc._id;
+        }
       }
-      facilityFilter.region = regionId;
-    }
 
-    if (district) {
-      if (isObjectId(district)) {
-        districtId = new mongoose.Types.ObjectId(district);
-      } else {
-        // prefer district scoped to region if we have regionId
-        const q = regionId ? { name: district, region: regionId } : { name: district };
-        const districtDoc = await District.findOne(q);
-        if (!districtDoc) return res.json([]); // district not found
-        districtId = districtDoc._id;
+      // district
+      if (district) {
+        if (!facilityFilter.region && !isObjectIdString(district)) {
+          // We need region context to reliably resolve district by name; try by id fallback
+          // attempt to find district by name without region only if id passed or unique
+          // but best effort: try direct lookup
+          const maybeDistrict = await District.findOne({ name: district });
+          if (!maybeDistrict) return res.json([]);
+          facilityFilter.district = maybeDistrict._id;
+        } else if (isObjectIdString(district)) {
+          facilityFilter.district = mongoose.Types.ObjectId(district);
+        } else {
+          // district as name + region context present
+          const districtDoc = await District.findOne({ name: district, region: facilityFilter.region });
+          if (!districtDoc) return res.json([]);
+          facilityFilter.district = districtDoc._id;
+        }
       }
-      facilityFilter.district = districtId;
-    }
 
-    if (subDistrict) {
-      if (isObjectId(subDistrict)) {
-        subDistrictId = new mongoose.Types.ObjectId(subDistrict);
-      } else {
-        // prefer subDistrict scoped to district if we have districtId
-        const q = districtId ? { name: subDistrict, district: districtId } : { name: subDistrict };
-        const subDoc = await SubDistrict.findOne(q);
-        if (!subDoc) return res.json([]); // subDistrict not found
-        subDistrictId = subDoc._id;
-      }
-      facilityFilter.subDistrict = subDistrictId;
-    }
-
-    // If we have any facilityFilter constraints, find matching facility ids and add to match
-    if (Object.keys(facilityFilter).length > 0) {
-      const facilityIds = await HealthFacility.find(facilityFilter).distinct('_id');
+      // Query HealthFacility to get matching ids
+      facilityIds = await HealthFacility.find(facilityFilter).distinct('_id');
       if (!facilityIds || facilityIds.length === 0) {
-        // No facilities under that region/district/subDistrict -> empty result
+        // no facilities match -> no cases
         return res.json([]);
       }
-      match.healthFacility = { $in: facilityIds };
     }
 
-    // --- community filter (case.community) (id or name)
+    // Resolve community if provided (id or name)
+    let communityId = null;
     if (community) {
-      if (isObjectId(community)) {
-        match.community = new mongoose.Types.ObjectId(community);
+      if (isObjectIdString(community)) {
+        communityId = new mongoose.Types.ObjectId(community);
       } else {
-        // attempt to resolve community by name with a sensible parent context:
-        // prefer subDistrictId > districtId; if neither available, do a global findOne by name.
-        const cQuery = { name: community };
-        if (subDistrictId) cQuery.subDistrict = subDistrictId;
-        else if (districtId) cQuery.district = districtId;
-        // if regionId only: communities don't reference region directly (they reference subDistrict/district),
-        // so fallback to name-only search.
-        const comDoc = await Community.findOne(cQuery);
-        if (!comDoc) return res.json([]); // community not found
-        match.community = comDoc._id;
+        // attempt to find by name (best-effort)
+        const communityDoc = await Community.findOne({ name: community });
+        if (!communityDoc) {
+          return res.json([]);
+        }
+        communityId = communityDoc._id;
       }
     }
 
-    // --- aggregation pipeline (group by caseType, status, patient.status then roll up)
-    const caseTypeCollection = CaseType.collection.name;
+    // Apply facility/community constraints to match:
+    if (communityId) {
+      // If facility filter present, require both community and facility (AND)
+      if (facilityIds && facilityIds.length > 0) {
+        match.$and = [
+          { community: communityId },
+          { healthFacility: { $in: facilityIds.map((id) => mongoose.Types.ObjectId(id)) } },
+        ];
+      } else {
+        match.community = communityId;
+      }
+    } else if (facilityIds && facilityIds.length > 0) {
+      match.healthFacility = { $in: facilityIds.map((id) => mongoose.Types.ObjectId(id)) };
+    }
+
+    // Aggregation pipeline (same shape as previous summary, but starting with our dynamic match)
+    const caseTypeCollection = CaseType.collection.name; // exact collection name
     const pipeline = [
       { $match: match },
       {
@@ -525,7 +533,12 @@ const getCaseTypeSummary = async (req, res) => {
           confirmed_recovered: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$_id.status', 'confirmed'] }, { $eq: ['$_id.patientStatus', 'Recovered'] }] },
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'confirmed'] },
+                    { $eq: ['$_id.patientStatus', 'Recovered'] },
+                  ],
+                },
                 '$count',
                 0,
               ],
@@ -534,7 +547,12 @@ const getCaseTypeSummary = async (req, res) => {
           confirmed_ongoingTreatment: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$_id.status', 'confirmed'] }, { $eq: ['$_id.patientStatus', 'Ongoing treatment'] }] },
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'confirmed'] },
+                    { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
+                  ],
+                },
                 '$count',
                 0,
               ],
@@ -543,7 +561,12 @@ const getCaseTypeSummary = async (req, res) => {
           confirmed_deceased: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$_id.status', 'confirmed'] }, { $eq: ['$_id.patientStatus', 'Deceased'] }] },
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'confirmed'] },
+                    { $eq: ['$_id.patientStatus', 'Deceased'] },
+                  ],
+                },
                 '$count',
                 0,
               ],
@@ -552,7 +575,12 @@ const getCaseTypeSummary = async (req, res) => {
           suspected_recovered: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$_id.status', 'suspected'] }, { $eq: ['$_id.patientStatus', 'Recovered'] }] },
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'suspected'] },
+                    { $eq: ['$_id.patientStatus', 'Recovered'] },
+                  ],
+                },
                 '$count',
                 0,
               ],
@@ -561,7 +589,12 @@ const getCaseTypeSummary = async (req, res) => {
           suspected_ongoingTreatment: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$_id.status', 'suspected'] }, { $eq: ['$_id.patientStatus', 'Ongoing treatment'] }] },
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'suspected'] },
+                    { $eq: ['$_id.patientStatus', 'Ongoing treatment'] },
+                  ],
+                },
                 '$count',
                 0,
               ],
@@ -570,7 +603,12 @@ const getCaseTypeSummary = async (req, res) => {
           suspected_deceased: {
             $sum: {
               $cond: [
-                { $and: [{ $eq: ['$_id.status', 'suspected'] }, { $eq: ['$_id.patientStatus', 'Deceased'] }] },
+                {
+                  $and: [
+                    { $eq: ['$_id.status', 'suspected'] },
+                    { $eq: ['$_id.patientStatus', 'Deceased'] },
+                  ],
+                },
                 '$count',
                 0,
               ],
@@ -617,6 +655,7 @@ const getCaseTypeSummary = async (req, res) => {
     return res.status(500).json({ message: 'Failed to load case type summary' });
   }
 };
+
 module.exports = {
   createCase,
   updateCaseStatus,
