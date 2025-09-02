@@ -140,27 +140,39 @@ const getFacilitiesUnder = async (req, res) => {
   res.json(facilities);
 };
 
+// replace existing getCommunities with this implementation
 const getCommunities = async (req, res) => {
   const { region, district, subDistrict } = req.query;
   if (!region || !district) return res.status(400).json({ message: 'Missing region or district' });
 
+  // Resolve region
   const regionDoc = await findRegionByNameOrId(region);
   if (!regionDoc) return res.status(404).json({ message: 'Region not found' });
 
+  // Resolve district (using region context)
   const districtDoc = await findDistrictByNameOrId(district, regionDoc._id);
   if (!districtDoc) return res.status(404).json({ message: 'District not found' });
 
-  let subDistrictDoc = null;
+  // If a subDistrict is provided: resolve it and return communities directly under it
   if (subDistrict) {
-    subDistrictDoc = await findSubDistrictByNameOrId(subDistrict, districtDoc._id);
+    const subDistrictDoc = await findSubDistrictByNameOrId(subDistrict, districtDoc._id);
     if (!subDistrictDoc) return res.status(404).json({ message: 'SubDistrict not found' });
+
+    const communities = await Community.find({ subDistrict: subDistrictDoc._id }).sort({ name: 1 });
+    return res.json(communities.map((c) => c.name));
   }
 
-  const filter = subDistrictDoc
-    ? { subDistrict: subDistrictDoc._id }
-    : { subDistrict: null, district: districtDoc._id };
+  // No subDistrict provided:
+  // Find all subDistricts under the given district, then return communities that belong to those subDistricts.
+  const subDistrictDocs = await SubDistrict.find({ district: districtDoc._id }).select('_id').lean();
+  const subIds = subDistrictDocs.map((s) => s._id);
 
-  const communities = await Community.find(filter).sort({ name: 1 });
+  if (subIds.length === 0) {
+    // No subdistricts => no communities
+    return res.json([]);
+  }
+
+  const communities = await Community.find({ subDistrict: { $in: subIds } }).sort({ name: 1 });
   res.json(communities.map((c) => c.name));
 };
 
