@@ -415,13 +415,6 @@ const unarchiveCase = async (req, res) => {
   }
 };
 
-const isObjectId = (v) => {
-  try {
-    return typeof v === 'string' && Types.ObjectId.isValid(v);
-  } catch {
-    return false;
-  }
-};
 
 module.exports = {
   createCase,
