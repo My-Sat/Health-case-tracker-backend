@@ -415,6 +415,214 @@ const unarchiveCase = async (req, res) => {
   }
 };
 
+const getCaseTypeSummary = async (req, res) => {
+  try {
+    const { caseType, region, district, subDistrict, community } = req.query;
+
+    // Base match: ignore archived cases and only include suspected/confirmed
+    const match = { archived: false, status: { $in: ['suspected', 'confirmed'] } };
+
+    // --- caseType filter (id or name)
+    if (caseType && caseType !== 'all') {
+      if (isObjectId(caseType)) {
+        match.caseType = new Types.ObjectId(caseType);
+      } else {
+        const ct = await CaseType.findOne({ name: caseType });
+        if (!ct) return res.json([]); // no matching case type -> empty result
+        match.caseType = ct._id;
+      }
+    }
+
+    // --- resolve facility-level filters (region/district/subDistrict) to find matching facility ids
+    const facilityFilter = {};
+    let regionId = null;
+    let districtId = null;
+    let subDistrictId = null;
+
+    if (region) {
+      if (isObjectId(region)) {
+        regionId = new Types.ObjectId(region);
+      } else {
+        const regionDoc = await Region.findOne({ name: region });
+        if (!regionDoc) return res.json([]); // region name not found
+        regionId = regionDoc._id;
+      }
+      facilityFilter.region = regionId;
+    }
+
+    if (district) {
+      if (isObjectId(district)) {
+        districtId = new Types.ObjectId(district);
+      } else {
+        // prefer district scoped to region if we have regionId
+        const q = regionId ? { name: district, region: regionId } : { name: district };
+        const districtDoc = await District.findOne(q);
+        if (!districtDoc) return res.json([]); // district not found
+        districtId = districtDoc._id;
+      }
+      facilityFilter.district = districtId;
+    }
+
+    if (subDistrict) {
+      if (isObjectId(subDistrict)) {
+        subDistrictId = new Types.ObjectId(subDistrict);
+      } else {
+        // prefer subDistrict scoped to district if we have districtId
+        const q = districtId ? { name: subDistrict, district: districtId } : { name: subDistrict };
+        const subDoc = await SubDistrict.findOne(q);
+        if (!subDoc) return res.json([]); // subDistrict not found
+        subDistrictId = subDoc._id;
+      }
+      facilityFilter.subDistrict = subDistrictId;
+    }
+
+    // If we have any facilityFilter constraints, find matching facility ids and add to match
+    if (Object.keys(facilityFilter).length > 0) {
+      const facilityIds = await HealthFacility.find(facilityFilter).distinct('_id');
+      if (!facilityIds || facilityIds.length === 0) {
+        // No facilities under that region/district/subDistrict -> empty result
+        return res.json([]);
+      }
+      match.healthFacility = { $in: facilityIds };
+    }
+
+    // --- community filter (case.community) (id or name)
+    if (community) {
+      if (isObjectId(community)) {
+        match.community = new Types.ObjectId(community);
+      } else {
+        // attempt to resolve community by name with a sensible parent context:
+        // prefer subDistrictId > districtId; if neither available, do a global findOne by name.
+        const cQuery = { name: community };
+        if (subDistrictId) cQuery.subDistrict = subDistrictId;
+        else if (districtId) cQuery.district = districtId;
+        // if regionId only: communities don't reference region directly (they reference subDistrict/district),
+        // so fallback to name-only search.
+        const comDoc = await Community.findOne(cQuery);
+        if (!comDoc) return res.json([]); // community not found
+        match.community = comDoc._id;
+      }
+    }
+
+    // --- aggregation pipeline (group by caseType, status, patient.status then roll up)
+    const caseTypeCollection = CaseType.collection.name;
+    const pipeline = [
+      { $match: match },
+      {
+        $group: {
+          _id: {
+            caseType: '$caseType',
+            status: '$status',
+            patientStatus: '$patient.status',
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.caseType',
+          total: { $sum: '$count' },
+          confirmed_total: {
+            $sum: { $cond: [{ $eq: ['$_id.status', 'confirmed'] }, '$count', 0] },
+          },
+          suspected_total: {
+            $sum: { $cond: [{ $eq: ['$_id.status', 'suspected'] }, '$count', 0] },
+          },
+          confirmed_recovered: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$_id.status', 'confirmed'] }, { $eq: ['$_id.patientStatus', 'Recovered'] }] },
+                '$count',
+                0,
+              ],
+            },
+          },
+          confirmed_ongoingTreatment: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$_id.status', 'confirmed'] }, { $eq: ['$_id.patientStatus', 'Ongoing treatment'] }] },
+                '$count',
+                0,
+              ],
+            },
+          },
+          confirmed_deceased: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$_id.status', 'confirmed'] }, { $eq: ['$_id.patientStatus', 'Deceased'] }] },
+                '$count',
+                0,
+              ],
+            },
+          },
+          suspected_recovered: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$_id.status', 'suspected'] }, { $eq: ['$_id.patientStatus', 'Recovered'] }] },
+                '$count',
+                0,
+              ],
+            },
+          },
+          suspected_ongoingTreatment: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$_id.status', 'suspected'] }, { $eq: ['$_id.patientStatus', 'Ongoing treatment'] }] },
+                '$count',
+                0,
+              ],
+            },
+          },
+          suspected_deceased: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ['$_id.status', 'suspected'] }, { $eq: ['$_id.patientStatus', 'Deceased'] }] },
+                '$count',
+                0,
+              ],
+            },
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: caseTypeCollection,
+          localField: '_id',
+          foreignField: '_id',
+          as: 'caseType',
+        },
+      },
+      { $unwind: '$caseType' },
+      {
+        $project: {
+          _id: 0,
+          caseTypeId: '$caseType._id',
+          name: '$caseType.name',
+          total: 1,
+          confirmed: {
+            total: '$confirmed_total',
+            recovered: '$confirmed_recovered',
+            ongoingTreatment: '$confirmed_ongoingTreatment',
+            deceased: '$confirmed_deceased',
+          },
+          suspected: {
+            total: '$suspected_total',
+            recovered: '$suspected_recovered',
+            ongoingTreatment: '$suspected_ongoingTreatment',
+            deceased: '$suspected_deceased',
+          },
+        },
+      },
+      { $sort: { name: 1 } },
+    ];
+
+    const results = await Case.aggregate(pipeline);
+    return res.json(results);
+  } catch (err) {
+    console.error('getCaseTypeSummary error:', err);
+    return res.status(500).json({ message: 'Failed to load case type summary' });
+  }
+};
 
 module.exports = {
   createCase,
