@@ -23,18 +23,29 @@ async function findOrCreateSubDistrict(name, districtId) {
 }
 
 // Accept either a district or subDistrict container
-async function findOrCreateCommunity(name, { districtId = null, subDistrictId = null }) {
-  const query = { name };
-  if (subDistrictId) query.subDistrict = subDistrictId;
-  else query.district = districtId;
+async function findOrCreateCommunity(name, { districtId = null, subDistrictId = null } = {}) {
+  if (!name) throw new Error('Community name required');
 
-  let community = await Community.findOne(query);
+  // If subDistrictId provided, prefer that container
+  if (subDistrictId) {
+    let community = await Community.findOne({ name, subDistrict: subDistrictId });
+    if (!community) {
+      community = await Community.create({ name, subDistrict: subDistrictId, district: null });
+    }
+    return community;
+  }
+
+  // Otherwise use district container
+  if (!districtId) {
+    // no parent provided -> try global find
+    let community = await Community.findOne({ name });
+    if (!community) community = await Community.create({ name, district: null, subDistrict: null });
+    return community;
+  }
+
+  let community = await Community.findOne({ name, district: districtId });
   if (!community) {
-    community = await Community.create({
-      name,
-      district: subDistrictId ? null : districtId,
-      subDistrict: subDistrictId ?? null,
-    });
+    community = await Community.create({ name, district: districtId, subDistrict: null });
   }
   return community;
 }

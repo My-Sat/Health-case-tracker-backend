@@ -20,26 +20,39 @@ const isObjectId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isVal
 
 // Utility: resolve/create a Community ID based on (optional) location + name
 async function resolveCommunityId({ communityName, location, fallbackFacility }) {
+  // If no community name provided at all, use the facility's configured community
   if (!communityName || !communityName.trim()) {
-    return fallbackFacility.community;
+    return fallbackFacility.community; // ObjectId
   }
 
+  // If a location object is provided, use that path (region > district > [subDistrict?])
   if (location && location.region && location.district) {
     const regionDoc = await findOrCreateRegion(location.region.trim());
     const districtDoc = await findOrCreateDistrict(location.district.trim(), regionDoc._id);
 
-    let parentId = districtDoc._id;
+    let subDistrictId = null;
     if (location.subDistrict && location.subDistrict.trim()) {
       const subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
-      parentId = subDistrictDoc._id;
+      subDistrictId = subDistrictDoc._id;
     }
 
-    const communityDoc = await findOrCreateCommunity(communityName.trim(), parentId);
+    // New utilities API: pass an object with districtId/subDistrictId
+    const communityDoc = await findOrCreateCommunity(
+      communityName.trim(),
+      { districtId: districtDoc._id, subDistrictId }
+    );
     return communityDoc._id;
   }
 
-  const parentId = fallbackFacility.subDistrict ?? fallbackFacility.district;
-  const communityDoc = await findOrCreateCommunity(communityName.trim(), parentId);
+  // Otherwise: create/find the community under the officer's facility path
+  // prefer subDistrict (if set) else district
+  const fallbackSubId = fallbackFacility.subDistrict ?? null;
+  const fallbackDistrictId = fallbackSubId ? null : (fallbackFacility.district ?? null);
+
+  const communityDoc = await findOrCreateCommunity(communityName.trim(), {
+    districtId: fallbackDistrictId,
+    subDistrictId: fallbackSubId,
+  });
   return communityDoc._id;
 }
 
@@ -476,24 +489,33 @@ const getCaseTypeSummary = async (req, res) => {
     }
 
     // --- community filter (case.community) (id or name)
-if (community) {
-  if (isObjectId(community)) {
-    match.community = new mongoose.Types.ObjectId(community);
-  } else {
-    const cQuery = { name: community };
+    if (community) {
+      if (isObjectId(community)) {
+        match.community = new mongoose.Types.ObjectId(community);
+      } else {
+        // attempt to resolve community by name with a sensible parent context:
+        // prefer subDistrictId > districtId; if neither available, do a global findOne by name.
+        let comDoc = null;
 
-    if (subDistrictId) {
-      cQuery.subDistrict = subDistrictId;
-    } else if (districtId) {
-      cQuery.district = districtId;
+        if (subDistrictId) {
+          comDoc = await Community.findOne({ name: community, subDistrict: subDistrictId });
+        } else if (districtId) {
+          // include communities directly under district OR under any subDistrict that belongs to the district
+          const subDocs = await SubDistrict.find({ district: districtId }).select('_id').lean();
+          const subIds = subDocs.map((s) => s._id);
+          comDoc = await Community.findOne({
+            name: community,
+            $or: [{ district: districtId }, { subDistrict: { $in: subIds } }],
+          });
+        } else {
+          // fallback: global name match (could return ambiguous result if duplicates exist)
+          comDoc = await Community.findOne({ name: community });
+        }
+
+        if (!comDoc) return res.json([]); // community not found
+        match.community = comDoc._id;
+      }
     }
-    // If only region is given, fall back to global name search
-
-    const comDoc = await Community.findOne(cQuery);
-    if (!comDoc) return res.json([]); 
-    match.community = comDoc._id;
-  }
-}
 
     // --- aggregation pipeline (group by caseType, status, patient.status then roll up)
     const caseTypeCollection = CaseType.collection.name;
