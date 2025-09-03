@@ -20,29 +20,24 @@ const isObjectId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isVal
 
 // Utility: resolve/create a Community ID based on (optional) location + name
 async function resolveCommunityId({ communityName, location, fallbackFacility }) {
-  // If no community name provided at all, use the facility's configured community
   if (!communityName || !communityName.trim()) {
-    return fallbackFacility.community; // ObjectId
+    return fallbackFacility.community;
   }
 
-  // If a location object is provided, use that path (region > district > [subDistrict?])
   if (location && location.region && location.district) {
     const regionDoc = await findOrCreateRegion(location.region.trim());
     const districtDoc = await findOrCreateDistrict(location.district.trim(), regionDoc._id);
 
-    let subDistrictDoc = null;
+    let parentId = districtDoc._id;
     if (location.subDistrict && location.subDistrict.trim()) {
-      subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
+      const subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
+      parentId = subDistrictDoc._id;
     }
 
-    const communityDoc = await findOrCreateCommunity(
-      communityName.trim(),
-      subDistrictDoc ? subDistrictDoc._id : districtDoc._id // same fallback pattern used elsewhere
-    );
+    const communityDoc = await findOrCreateCommunity(communityName.trim(), parentId);
     return communityDoc._id;
   }
 
-  // Otherwise: create/find the community under the officer's facility path
   const parentId = fallbackFacility.subDistrict ?? fallbackFacility.district;
   const communityDoc = await findOrCreateCommunity(communityName.trim(), parentId);
   return communityDoc._id;
@@ -481,22 +476,24 @@ const getCaseTypeSummary = async (req, res) => {
     }
 
     // --- community filter (case.community) (id or name)
-    if (community) {
-      if (isObjectId(community)) {
-        match.community = new mongoose.Types.ObjectId(community);
-      } else {
-        // attempt to resolve community by name with a sensible parent context:
-        // prefer subDistrictId > districtId; if neither available, do a global findOne by name.
-        const cQuery = { name: community };
-        if (subDistrictId) cQuery.subDistrict = subDistrictId;
-        else if (districtId) cQuery.district = districtId;
-        // if regionId only: communities don't reference region directly (they reference subDistrict/district),
-        // so fallback to name-only search.
-        const comDoc = await Community.findOne(cQuery);
-        if (!comDoc) return res.json([]); // community not found
-        match.community = comDoc._id;
-      }
+if (community) {
+  if (isObjectId(community)) {
+    match.community = new mongoose.Types.ObjectId(community);
+  } else {
+    const cQuery = { name: community };
+
+    if (subDistrictId) {
+      cQuery.subDistrict = subDistrictId;
+    } else if (districtId) {
+      cQuery.district = districtId;
     }
+    // If only region is given, fall back to global name search
+
+    const comDoc = await Community.findOne(cQuery);
+    if (!comDoc) return res.json([]); 
+    match.community = comDoc._id;
+  }
+}
 
     // --- aggregation pipeline (group by caseType, status, patient.status then roll up)
     const caseTypeCollection = CaseType.collection.name;
