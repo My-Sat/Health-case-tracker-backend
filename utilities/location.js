@@ -1,4 +1,4 @@
-// utils/locationHelpers.js
+// utilities/location.js
 const Region = require('../models/Region');
 const District = require('../models/District');
 const SubDistrict = require('../models/SubDistrict');
@@ -22,9 +22,20 @@ async function findOrCreateSubDistrict(name, districtId) {
   return subDistrict;
 }
 
-async function findOrCreateCommunity(name, subDistrictId) {
-  let community = await Community.findOne({ name, subDistrict: subDistrictId });
-  if (!community) community = await Community.create({ name, subDistrict: subDistrictId });
+// Accept either a district or subDistrict container
+async function findOrCreateCommunity(name, { districtId = null, subDistrictId = null }) {
+  const query = { name };
+  if (subDistrictId) query.subDistrict = subDistrictId;
+  else query.district = districtId;
+
+  let community = await Community.findOne(query);
+  if (!community) {
+    community = await Community.create({
+      name,
+      district: subDistrictId ? null : districtId,
+      subDistrict: subDistrictId ?? null,
+    });
+  }
   return community;
 }
 
@@ -32,5 +43,5 @@ module.exports = {
   findOrCreateRegion,
   findOrCreateDistrict,
   findOrCreateSubDistrict,
-  findOrCreateCommunity
+  findOrCreateCommunity,
 };

@@ -11,7 +11,7 @@ const {
   findOrCreateRegion,
   findOrCreateDistrict,
   findOrCreateSubDistrict,
-  findOrCreateCommunity
+  findOrCreateCommunity,
 } = require('../utilities/location');
 
 // ---------- helpers: accept id or name ----------
@@ -51,10 +51,11 @@ const createFacility = async (req, res) => {
   if (location.subDistrict) {
     subDistrict = await findOrCreateSubDistrict(location.subDistrict, district._id);
   }
-  const community = await findOrCreateCommunity(
-    location.community,
-    subDistrict ? subDistrict._id : district._id
-  );
+
+  const community = await findOrCreateCommunity(location.community, {
+    subDistrictId: subDistrict ? subDistrict._id : null,
+    districtId: subDistrict ? null : district._id,
+  });
 
   const facility = await HealthFacility.create({
     name,
@@ -71,15 +72,17 @@ const createFacility = async (req, res) => {
 
 // ---------- reads ----------
 const getAllFacilities = async (req, res) => {
-  const facilities = await HealthFacility.find({ archived: false })
-    .populate('region district subDistrict community');
+  const facilities = await HealthFacility.find({ archived: false }).populate(
+    'region district subDistrict community'
+  );
   res.json(facilities);
 };
 
 const getFacilityById = async (req, res) => {
   const { id } = req.params;
-  const facility = await HealthFacility.findById(id)
-    .populate('region district subDistrict community');
+  const facility = await HealthFacility.findById(id).populate(
+    'region district subDistrict community'
+  );
 
   if (!facility) return res.status(404).json({ message: 'Facility not found' });
   res.json(facility);
@@ -135,8 +138,9 @@ const getFacilitiesUnder = async (req, res) => {
     }
   }
 
-  const facilities = await HealthFacility.find(filter)
-    .populate('region district subDistrict community');
+  const facilities = await HealthFacility.find(filter).populate(
+    'region district subDistrict community'
+  );
   res.json(facilities);
 };
 
@@ -150,17 +154,27 @@ const getCommunities = async (req, res) => {
   const districtDoc = await findDistrictByNameOrId(district, regionDoc._id);
   if (!districtDoc) return res.status(404).json({ message: 'District not found' });
 
-  let subDistrictDoc = null;
   if (subDistrict) {
-    subDistrictDoc = await findSubDistrictByNameOrId(subDistrict, districtDoc._id);
+    const subDistrictDoc = await findSubDistrictByNameOrId(subDistrict, districtDoc._id);
     if (!subDistrictDoc) return res.status(404).json({ message: 'SubDistrict not found' });
+    const communities = await Community.find({ subDistrict: subDistrictDoc._id }).sort({
+      name: 1,
+    });
+    return res.json(communities.map((c) => c.name));
   }
 
-  const filter = subDistrictDoc
-    ? { subDistrict: subDistrictDoc._id }
-    : { subDistrict: null, district: districtDoc._id };
+  // When no sub-district is specified, return ALL communities under the district:
+  //  - those directly under the district, and
+  //  - those under any of its sub-districts.
+  const subDistricts = await SubDistrict.find({ district: districtDoc._id }).select('_id');
+  const subIds = subDistricts.map((s) => s._id);
 
-  const communities = await Community.find(filter).sort({ name: 1 });
+  const communities = await Community.find({
+    $or: [{ district: districtDoc._id }, { subDistrict: { $in: subIds } }],
+  })
+    .sort({ name: 1 })
+    .select('name');
+
   res.json(communities.map((c) => c.name));
 };
 
@@ -180,10 +194,10 @@ const updateFacility = async (req, res) => {
     subDistrict = await findOrCreateSubDistrict(location.subDistrict, district._id);
   }
 
-  const community = await findOrCreateCommunity(
-    location.community,
-    subDistrict ? subDistrict._id : district._id
-  );
+  const community = await findOrCreateCommunity(location.community, {
+    subDistrictId: subDistrict ? subDistrict._id : null,
+    districtId: subDistrict ? null : district._id,
+  });
 
   facility.name = name;
   facility.region = region._id;
@@ -206,17 +220,15 @@ const archiveFacility = async (req, res) => {
   facility.archived = true;
   await facility.save();
 
-  await Case.updateMany(
-    { healthFacility: facility._id },
-    { $set: { archived: true } }
-  );
+  await Case.updateMany({ healthFacility: facility._id }, { $set: { archived: true } });
 
   res.json({ message: 'Facility and associated cases archived' });
 };
 
 const getArchivedFacilities = async (req, res) => {
-  const facilities = await HealthFacility.find({ archived: true })
-    .populate('region district subDistrict community');
+  const facilities = await HealthFacility.find({ archived: true }).populate(
+    'region district subDistrict community'
+  );
   res.json(facilities);
 };
 
@@ -238,10 +250,10 @@ const patchFacility = async (req, res) => {
     if (subDistrict) {
       subDistrictDoc = await findOrCreateSubDistrict(subDistrict, districtDoc._id);
     }
-    const communityDoc = await findOrCreateCommunity(
-      community,
-      subDistrictDoc ? subDistrictDoc._id : districtDoc._id
-    );
+    const communityDoc = await findOrCreateCommunity(community, {
+      subDistrictId: subDistrictDoc ? subDistrictDoc._id : null,
+      districtId: subDistrictDoc ? null : districtDoc._id,
+    });
 
     facility.region = regionDoc._id;
     facility.district = districtDoc._id;
@@ -252,10 +264,7 @@ const patchFacility = async (req, res) => {
   if (updateData.archived !== undefined) {
     facility.archived = updateData.archived;
     if (!updateData.archived) {
-      await Case.updateMany(
-        { healthFacility: facility._id },
-        { $set: { archived: false } }
-      );
+      await Case.updateMany({ healthFacility: facility._id }, { $set: { archived: false } });
     }
   }
 
@@ -276,5 +285,5 @@ module.exports = {
   updateFacility,
   archiveFacility,
   getArchivedFacilities,
-  patchFacility
+  patchFacility,
 };
