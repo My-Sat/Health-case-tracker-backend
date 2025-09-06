@@ -16,6 +16,17 @@ const {
   findOrCreateCommunity,
 } = require('../utilities/location');
 
+// --- helper to populate community with parent refs (subDistrict, district, region) ---
+const communityPopulate = {
+  path: 'community',
+  populate: [
+    { path: 'subDistrict', select: 'name' },
+    { path: 'district', select: 'name' },
+    { path: 'region', select: 'name' },
+  ],
+};
+
+
 const isObjectId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isValid(v);
 
 // Utility: resolve/create a Community ID based on (optional) location + name
@@ -107,7 +118,7 @@ const createCase = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate(communityPopulate);
 
     res.status(201).json(populated);
   } catch (err) {
@@ -146,7 +157,8 @@ const updateCaseStatus = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate(communityPopulate);
+      
     res.json(populated);
   } catch (err) {
     console.error(err);
@@ -176,7 +188,7 @@ const getCases = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate('community', 'name')
+      .populate(communityPopulate)
       .sort({ timeline: -1 })
       .lean();
 
@@ -215,7 +227,7 @@ const getAllCasesForOfficers = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate('community', 'name')
+      .populate(communityPopulate)
       .sort({ timeline: -1 })
       .lean();
 
@@ -265,7 +277,7 @@ const getOfficerCases = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate('community', 'name')
+      .populate(communityPopulate)
       .sort({ timeline: -1 })
       .lean();
 
@@ -353,7 +365,8 @@ const editCaseDetails = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate(communityPopulate);
+      
     res.json(populated);
   } catch (err) {
     console.error(err);
@@ -388,7 +401,8 @@ const getArchivedCases = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate(communityPopulate);
+          
     res.json(archived);
   } catch (err) {
     console.error(err);
