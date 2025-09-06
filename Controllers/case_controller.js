@@ -16,13 +16,27 @@ const {
   findOrCreateCommunity,
 } = require('../utilities/location');
 
-// --- helper to populate community with parent refs (subDistrict, district, region) ---
+// --- robust helper to populate community with parent names (via subDistrict -> district -> region)
 const communityPopulate = {
   path: 'community',
+  select: 'name district subDistrict', // ensure we fetch the pointer ids + name
   populate: [
-    { path: 'subDistrict', select: 'name' },
-    { path: 'district', select: 'name' },
-    { path: 'region', select: 'name' },
+    // If community belongs to a subDistrict, populate that subDistrict and its district -> region
+    {
+      path: 'subDistrict',
+      select: 'name district',
+      populate: {
+        path: 'district',
+        select: 'name region',
+        populate: { path: 'region', select: 'name' },
+      },
+    },
+    // Also populate community.district (covers communities that belong directly to a district)
+    {
+      path: 'district',
+      select: 'name region',
+      populate: { path: 'region', select: 'name' },
+    },
   ],
 };
 
@@ -118,7 +132,7 @@ const createCase = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate(communityPopulate);
+      .populate('community', 'name');
 
     res.status(201).json(populated);
   } catch (err) {
@@ -157,7 +171,7 @@ const updateCaseStatus = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate(communityPopulate);
+      .populate('community', 'name');
       
     res.json(populated);
   } catch (err) {
@@ -188,7 +202,7 @@ const getCases = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate(communityPopulate)
+      .populate('community', 'name')
       .sort({ timeline: -1 })
       .lean();
 
@@ -227,7 +241,7 @@ const getAllCasesForOfficers = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate(communityPopulate)
+      .populate('community', 'name')
       .sort({ timeline: -1 })
       .lean();
 
@@ -277,7 +291,7 @@ const getOfficerCases = async (req, res) => {
           { path: 'community', select: 'name' },
         ],
       })
-      .populate(communityPopulate)
+      .populate('community', 'name')
       .sort({ timeline: -1 })
       .lean();
 
@@ -365,7 +379,7 @@ const editCaseDetails = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate(communityPopulate);
+      .populate('community', 'name');
       
     res.json(populated);
   } catch (err) {
@@ -401,7 +415,7 @@ const getArchivedCases = async (req, res) => {
       .populate('officer', 'fullName')
       .populate('healthFacility')
       .populate('caseType')
-      .populate(communityPopulate);
+      .populate('community', 'name');
           
     res.json(archived);
   } catch (err) {
