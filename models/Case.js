@@ -1,4 +1,3 @@
-// models/case.js
 const mongoose = require('mongoose');
 
 const caseSchema = new mongoose.Schema({
@@ -15,12 +14,6 @@ const caseSchema = new mongoose.Schema({
     gender: { type: String, enum: ['male', 'female', 'other'], required: true },
     phone: { type: String, required: true },
     status: { type: String, enum: ['Recovered', 'Ongoing treatment', 'Deceased'], required: true }
-  },
-  location: {
-    region: { type: String, default: null },
-    district: { type: String, default: null },
-    subDistrict: { type: String, default: null },
-    community: { type: String, default: null },
   }
 }, { timestamps: true });
 
