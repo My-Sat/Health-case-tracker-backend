@@ -18,43 +18,167 @@ const {
 
 const isObjectId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isValid(v);
 
-// Utility: resolve/create a Community ID based on (optional) location + name
-async function resolveCommunityId({ communityName, location, fallbackFacility }) {
-  // If no community name provided at all, use the facility's configured community
-  if (!communityName || !communityName.trim()) {
-    return fallbackFacility.community; // ObjectId
+// --------------------- helpers ---------------------
+const objectIdRe = /^[0-9a-fA-F]{24}$/;
+
+// Read a human name from a candidate that may be:
+// - a string name
+// - a populated doc with .name or .fullName
+// - an ObjectId (ignored)
+// - extended JSON { $oid: '...' } (ignored)
+function readNameCandidate(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return '';
+    if (objectIdRe.test(s)) return '';
+    return s;
   }
-
-  // If a location object is provided, use that path (region > district > [subDistrict?])
-  if (location && location.region && location.district) {
-    const regionDoc = await findOrCreateRegion(location.region.trim());
-    const districtDoc = await findOrCreateDistrict(location.district.trim(), regionDoc._id);
-
-    let subDistrictId = null;
-    if (location.subDistrict && location.subDistrict.trim()) {
-      const subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
-      subDistrictId = subDistrictDoc._id;
+  if (v instanceof mongoose.Types.ObjectId) return '';
+  if (typeof v === 'object') {
+    if (typeof v.name === 'string' && v.name.trim() && !objectIdRe.test(v.name.trim())) return v.name.trim();
+    if (typeof v.fullName === 'string' && v.fullName.trim() && !objectIdRe.test(v.fullName.trim())) return v.fullName.trim();
+    if (v._doc && typeof v._doc === 'object') {
+      const inner = v._doc;
+      if (typeof inner.name === 'string' && inner.name.trim() && !objectIdRe.test(inner.name.trim())) return inner.name.trim();
+      if (typeof inner.fullName === 'string' && inner.fullName.trim() && !objectIdRe.test(inner.fullName.trim())) return inner.fullName.trim();
     }
+    if (v.$oid && typeof v.$oid === 'string') {
+      const s = v.$oid.trim();
+      if (s && !objectIdRe.test(s)) return s;
+      return '';
+    }
+    // nested possible containers
+    if (v.region) {
+      const r = readNameCandidate(v.region);
+      if (r) return r;
+    }
+    if (v.district) {
+      const d = readNameCandidate(v.district);
+      if (d) return d;
+    }
+    if (v.subDistrict) {
+      const sd = readNameCandidate(v.subDistrict);
+      if (sd) return sd;
+    }
+    if (v.community) {
+      const c = readNameCandidate(v.community);
+      if (c) return c;
+    }
+  }
+  try {
+    const s = String(v).trim();
+    if (!s) return '';
+    if (objectIdRe.test(s)) return '';
+    return s;
+  } catch (_) {
+    return '';
+  }
+}
 
-    // New utilities API: pass an object with districtId/subDistrictId
-    const communityDoc = await findOrCreateCommunity(
-      communityName.trim(),
-      { districtId: districtDoc._id, subDistrictId }
-    );
-    return communityDoc._id;
+/**
+ * Given a case-like object (possibly populated), synthesize a simple location object:
+ * { region: string, district: string, subDistrict: string, community: string }
+ *
+ * Priority:
+ * 1) case.location (populated)
+ * 2) case.community (populated) -> look for community.region/district/subDistrict
+ * 3) healthFacility.location (synthesized earlier)
+ * 4) fallback to healthFacility.region/district/subDistrict/community fields
+ */
+function synthesizeCaseLocation(caseObj) {
+  const caseLoc = caseObj.location || {};
+  const regionFromCase = readNameCandidate(caseLoc.region);
+  const districtFromCase = readNameCandidate(caseLoc.district);
+  const subDistrictFromCase = readNameCandidate(caseLoc.subDistrict);
+  const communityFromCase = readNameCandidate(caseLoc.community);
+
+  if (regionFromCase || districtFromCase || subDistrictFromCase || communityFromCase) {
+    return {
+      region: regionFromCase,
+      district: districtFromCase,
+      subDistrict: subDistrictFromCase,
+      community: communityFromCase,
+    };
   }
 
-  // Otherwise: create/find the community under the officer's facility path
-  // prefer subDistrict (if set) else district
-  const fallbackSubId = fallbackFacility.subDistrict ?? null;
-  const fallbackDistrictId = fallbackSubId ? null : (fallbackFacility.district ?? null);
+  const com = caseObj.community || {};
+  const communityName = readNameCandidate(com);
+  const communityRegion = readNameCandidate(com.region);
+  const communityDistrict = readNameCandidate(com.district);
+  const communitySubDistrict = readNameCandidate(com.subDistrict);
 
-  const communityDoc = await findOrCreateCommunity(communityName.trim(), {
-    districtId: fallbackDistrictId,
-    subDistrictId: fallbackSubId,
-  });
-  return communityDoc._id;
+  if (communityName || communityRegion || communityDistrict || communitySubDistrict) {
+    return {
+      region: communityRegion,
+      district: communityDistrict,
+      subDistrict: communitySubDistrict,
+      community: communityName,
+    };
+  }
+
+  const hf = caseObj.healthFacility || {};
+  if (hf.location && typeof hf.location === 'object') {
+    const region = readNameCandidate(hf.location.region);
+    const district = readNameCandidate(hf.location.district);
+    const subDistrict = readNameCandidate(hf.location.subDistrict);
+    const community = readNameCandidate(hf.location.community);
+    if (region || district || subDistrict || community) {
+      return { region, district, subDistrict, community };
+    }
+  }
+
+  const hfRegion = readNameCandidate(hf.region);
+  const hfDistrict = readNameCandidate(hf.district);
+  const hfSubDistrict = readNameCandidate(hf.subDistrict);
+  const hfCommunity = readNameCandidate(hf.community);
+  return {
+    region: hfRegion,
+    district: hfDistrict,
+    subDistrict: hfSubDistrict,
+    community: hfCommunity,
+  };
 }
+
+/**
+ * Convert a supplied location object containing names into stored ObjectId refs.
+ * Expects: { region: '...', district: '...', subDistrict?: '...', community: '...' }
+ * Returns: { regionId, districtId, subDistrictId, communityId } (ObjectIds)
+ */
+async function namesToRefs(location = {}, communityName, fallbackFacility) {
+  // If location not provided, return nulls
+  if (!location || !location.region || !location.district) return null;
+
+  const regionDoc = await findOrCreateRegion(location.region.trim());
+  const districtDoc = await findOrCreateDistrict(location.district.trim(), regionDoc._id);
+
+  let subDistrictDoc = null;
+  if (location.subDistrict && location.subDistrict.trim()) {
+    subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
+  }
+
+  // communityName is required by create_case_screen when useFacilityCommunity===false,
+  // but handle defensively: if missing, still try to create a default community under district/subDistrict
+  const commName = communityName && communityName.trim() ? communityName.trim() : null;
+  const communityDoc = commName
+    ? await findOrCreateCommunity(commName, {
+        subDistrictId: subDistrictDoc ? subDistrictDoc._id : null,
+        districtId: subDistrictDoc ? null : districtDoc._id,
+      })
+    : await findOrCreateCommunity('Unknown', {
+        subDistrictId: subDistrictDoc ? subDistrictDoc._id : null,
+        districtId: subDistrictDoc ? null : districtDoc._id,
+      });
+
+  return {
+    regionId: regionDoc._id,
+    districtId: districtDoc._id,
+    subDistrictId: subDistrictDoc ? subDistrictDoc._id : null,
+    communityId: communityDoc._id,
+  };
+}
+
+// --------------------- controllers ---------------------
 
 const createCase = async (req, res) => {
   try {
@@ -79,35 +203,104 @@ const createCase = async (req, res) => {
       return res.status(400).json({ message: 'Invalid case type ID' });
     }
 
-    // Resolve community id per rules
+    // Resolve community id per rules. If location object provided we will prefer converting names->refs
     let communityId;
+    let caseLocationRefs = null;
+
     if (useFacilityCommunity === true) {
-      // explicit flag from client: use facility community (ObjectId)
       communityId = facility.community;
+      caseLocationRefs = null;
     } else {
-      // fallback behavior based on provided community name or blank -> resolveCommunityId will use facility.community
-      communityId = await resolveCommunityId({
-        communityName: community, // may be null/empty if using facility community
-        location,                 // optional: { region, district, subDistrict? }
-        fallbackFacility: facility,
-      });
+      // If client supplied a location (names), convert -> refs and persist them
+      if (location && location.region && location.district) {
+        const refs = await namesToRefs(location, community, facility);
+        if (refs) {
+          communityId = refs.communityId;
+          caseLocationRefs = {
+            region: refs.regionId,
+            district: refs.districtId,
+            subDistrict: refs.subDistrictId,
+            community: refs.communityId,
+          };
+        } else {
+          // fallback to resolveCommunityId (handles community name only)
+          communityId = await (async () => {
+            const cid = await (async () => {
+              const fallback = await resolveCommunityId({
+                communityName: community,
+                location,
+                fallbackFacility: facility,
+              });
+              return fallback;
+            })();
+            return cid;
+          })();
+          caseLocationRefs = null;
+        }
+      } else {
+        // No location supplied: fallback to previous resolveCommunityId behavior
+        communityId = await resolveCommunityId({
+          communityName: community,
+          location,
+          fallbackFacility: facility,
+        });
+        caseLocationRefs = null;
+      }
     }
 
-    // Create case
-    const newCase = await Case.create({
+    // Build payload; persist location refs only when present
+    const newCasePayload = {
       officer: req.user._id,
       caseType: type._id,
       healthFacility: facility._id,
       status: 'suspected',
       community: communityId,
       patient,
-    });
+    };
 
+    if (caseLocationRefs) {
+      newCasePayload.location = caseLocationRefs;
+    } else {
+      newCasePayload.location = null;
+    }
+
+    const newCase = await Case.create(newCasePayload);
+
+    // Populate the returned document, including location refs -> names
     const populated = await Case.findById(newCase._id)
       .populate('officer', 'fullName')
-      .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community')
+      // populate case.location.* refs to get names
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
+      .lean();
+
+    // Ensure healthFacility.location (back-compat) still present
+    if (populated.healthFacility && !populated.healthFacility.location) {
+      const hf = populated.healthFacility;
+      hf.location = {
+        region: hf.region?.name ?? hf.region ?? null,
+        district: hf.district?.name ?? hf.district ?? null,
+        subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+        community: hf.community?.name ?? hf.community ?? null,
+      };
+    }
+
+    // Attach synthesized case-level 'location' (strings)
+    populated.location = synthesizeCaseLocation(populated);
 
     res.status(201).json(populated);
   } catch (err) {
@@ -144,9 +337,36 @@ const updateCaseStatus = async (req, res) => {
 
     const populated = await Case.findById(existingCase._id)
       .populate('officer', 'fullName')
-      .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community')
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
+      .lean();
+
+    if (populated.healthFacility && !populated.healthFacility.location) {
+      const hf = populated.healthFacility;
+      hf.location = {
+        region: hf.region?.name ?? hf.region ?? null,
+        district: hf.district?.name ?? hf.district ?? null,
+        subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+        community: hf.community?.name ?? hf.community ?? null,
+      };
+    }
+
+    populated.location = synthesizeCaseLocation(populated);
+
     res.json(populated);
   } catch (err) {
     console.error(err);
@@ -156,8 +376,6 @@ const updateCaseStatus = async (req, res) => {
 
 const getCases = async (req, res) => {
   try {
-    // Admins: see all non-archived cases
-    // Officers: only their own non-archived cases
     const query =
       req.user?.role === 'admin'
         ? { archived: false }
@@ -177,6 +395,10 @@ const getCases = async (req, res) => {
         ],
       })
       .populate('community', 'name')
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
       .sort({ timeline: -1 })
       .lean();
 
@@ -191,6 +413,9 @@ const getCases = async (req, res) => {
           community: hf.community?.name ?? hf.community ?? null,
         };
       }
+
+      // Attach synthesized case-level location (strings)
+      c.location = synthesizeCaseLocation(c);
     });
 
     res.json(cases);
@@ -216,10 +441,13 @@ const getAllCasesForOfficers = async (req, res) => {
         ],
       })
       .populate('community', 'name')
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
       .sort({ timeline: -1 })
       .lean();
 
-    // Back-compat: synthesize healthFacility.location with names (not ids)
     cases.forEach((c) => {
       const hf = c.healthFacility;
       if (hf && !hf.location) {
@@ -230,6 +458,8 @@ const getAllCasesForOfficers = async (req, res) => {
           community: hf.community?.name ?? hf.community ?? null,
         };
       }
+
+      c.location = synthesizeCaseLocation(c);
     });
 
     res.json(cases);
@@ -238,7 +468,6 @@ const getAllCasesForOfficers = async (req, res) => {
     res.status(500).json({ message: 'Failed to load all cases' });
   }
 };
-
 
 const getOfficerPatients = async (req, res) => {
   try {
@@ -266,10 +495,13 @@ const getOfficerCases = async (req, res) => {
         ],
       })
       .populate('community', 'name')
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
       .sort({ timeline: -1 })
       .lean();
 
-    // Make sure we always return readable strings under healthFacility.location
     cases.forEach((c) => {
       const hf = c.healthFacility;
       if (!hf) return;
@@ -280,6 +512,8 @@ const getOfficerCases = async (req, res) => {
         subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
         community: hf.community?.name ?? hf.community ?? null,
       };
+
+      c.location = synthesizeCaseLocation(c);
     });
 
     res.json(cases);
@@ -321,13 +555,42 @@ const editCaseDetails = async (req, res) => {
 
       if (useFacilityCommunity === true) {
         existing.community = facility.community;
+        // clear any previously stored case-level location (we're explicitly using facility community)
+        existing.location = null;
       } else {
-        const communityId = await resolveCommunityId({
-          communityName: typeof community === 'string' ? community : '',
-          location,
-          fallbackFacility: facility,
-        });
-        existing.community = communityId;
+        // If a location object is supplied, convert names -> refs and persist those refs
+        if (location && location.region && location.district) {
+          const refs = await namesToRefs(location, community, facility);
+          if (refs) {
+            existing.community = refs.communityId;
+            existing.location = {
+              region: refs.regionId,
+              district: refs.districtId,
+              subDistrict: refs.subDistrictId,
+              community: refs.communityId,
+            };
+          } else {
+            // fallback: resolve community by name only (no location provided)
+            const communityId = await resolveCommunityId({
+              communityName: typeof community === 'string' ? community : '',
+              location,
+              fallbackFacility: facility,
+            });
+            existing.community = communityId;
+            // do not persist location refs
+            existing.location = null;
+          }
+        } else {
+          // no location supplied -> just update community if provided, leave location unchanged
+          if (typeof community === 'string') {
+            const communityId = await resolveCommunityId({
+              communityName: community,
+              location,
+              fallbackFacility: facility,
+            });
+            existing.community = communityId;
+          }
+        }
       }
     }
 
@@ -351,9 +614,35 @@ const editCaseDetails = async (req, res) => {
 
     const populated = await Case.findById(caseId)
       .populate('officer', 'fullName')
-      .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community')
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
+      .lean();
+
+    if (populated.healthFacility && !populated.healthFacility.location) {
+      const hf = populated.healthFacility;
+      hf.location = {
+        region: hf.region?.name ?? hf.region ?? null,
+        district: hf.district?.name ?? hf.district ?? null,
+        subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+        community: hf.community?.name ?? hf.community ?? null,
+      };
+    }
+
+    populated.location = synthesizeCaseLocation(populated);
     res.json(populated);
   } catch (err) {
     console.error(err);
@@ -386,9 +675,37 @@ const getArchivedCases = async (req, res) => {
   try {
     const archived = await Case.find({ archived: true })
       .populate('officer', 'fullName')
-      .populate('healthFacility')
       .populate('caseType')
-      .populate('community');
+      .populate({
+        path: 'healthFacility',
+        select: 'name region district subDistrict community',
+        populate: [
+          { path: 'region', select: 'name' },
+          { path: 'district', select: 'name' },
+          { path: 'subDistrict', select: 'name' },
+          { path: 'community', select: 'name' },
+        ],
+      })
+      .populate('community')
+      .populate({ path: 'location.region', select: 'name', model: 'Region' })
+      .populate({ path: 'location.district', select: 'name', model: 'District' })
+      .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
+      .populate({ path: 'location.community', select: 'name', model: 'Community' })
+      .lean();
+
+    archived.forEach((c) => {
+      if (c.healthFacility && !c.healthFacility.location) {
+        const hf = c.healthFacility;
+        hf.location = {
+          region: hf.region?.name ?? hf.region ?? null,
+          district: hf.district?.name ?? hf.district ?? null,
+          subDistrict: hf.subDistrict?.name ?? hf.subDistrict ?? null,
+          community: hf.community?.name ?? hf.community ?? null,
+        };
+      }
+      c.location = synthesizeCaseLocation(c);
+    });
+
     res.json(archived);
   } catch (err) {
     console.error(err);
@@ -500,7 +817,6 @@ const getCaseTypeSummary = async (req, res) => {
         if (subDistrictId) {
           comDoc = await Community.findOne({ name: community, subDistrict: subDistrictId });
         } else if (districtId) {
-          // include communities directly under district OR under any subDistrict that belongs to the district
           const subDocs = await SubDistrict.find({ district: districtId }).select('_id').lean();
           const subIds = subDocs.map((s) => s._id);
           comDoc = await Community.findOne({
@@ -508,7 +824,6 @@ const getCaseTypeSummary = async (req, res) => {
             $or: [{ district: districtId }, { subDistrict: { $in: subIds } }],
           });
         } else {
-          // fallback: global name match (could return ambiguous result if duplicates exist)
           comDoc = await Community.findOne({ name: community });
         }
 
