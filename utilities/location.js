@@ -50,9 +50,56 @@ async function findOrCreateCommunity(name, { districtId = null, subDistrictId = 
   return community;
 }
 
+/**
+ * Resolve/create a Community ID given optional inputs:
+ * - communityName (string) — optional. If missing/blank we return fallbackFacility.community
+ * - location: { region, district, subDistrict? } — optional; when present we will create/find parents then community under them
+ * - fallbackFacility: HealthFacility doc (used when communityName present but no location is supplied)
+ *
+ * Returns a Community document (_id).
+ */
+async function resolveCommunityId({ communityName, location, fallbackFacility } = {}) {
+  // If no community name provided at all, use the facility's configured community
+  if (!communityName || !communityName.trim()) {
+    if (!fallbackFacility) throw new Error('No community name and no fallback facility provided');
+    return fallbackFacility.community; // ObjectId
+  }
+
+  // If a location object is provided, use that path (region > district > [subDistrict?])
+  if (location && location.region && location.district) {
+    const regionDoc = await findOrCreateRegion(location.region.trim());
+    const districtDoc = await findOrCreateDistrict(location.district.trim(), regionDoc._id);
+
+    let subDistrictId = null;
+    if (location.subDistrict && location.subDistrict.trim()) {
+      const subDistrictDoc = await findOrCreateSubDistrict(location.subDistrict.trim(), districtDoc._id);
+      subDistrictId = subDistrictDoc._id;
+    }
+
+    // Create/find community using the most specific parent available
+    const communityDoc = await findOrCreateCommunity(communityName.trim(), {
+      districtId: districtDoc._id,
+      subDistrictId,
+    });
+    return communityDoc._id;
+  }
+
+  // Otherwise: create/find the community under the officer's facility path
+  // prefer subDistrict (if set) else district
+  const fallbackSubId = (fallbackFacility && fallbackFacility.subDistrict) ? fallbackFacility.subDistrict : null;
+  const fallbackDistrictId = fallbackSubId ? null : ((fallbackFacility && fallbackFacility.district) ? fallbackFacility.district : null);
+
+  const communityDoc = await findOrCreateCommunity(communityName.trim(), {
+    districtId: fallbackDistrictId,
+    subDistrictId: fallbackSubId,
+  });
+  return communityDoc._id;
+}
+
 module.exports = {
   findOrCreateRegion,
   findOrCreateDistrict,
   findOrCreateSubDistrict,
   findOrCreateCommunity,
+  resolveCommunityId,
 };

@@ -14,6 +14,7 @@ const {
   findOrCreateDistrict,
   findOrCreateSubDistrict,
   findOrCreateCommunity,
+  resolveCommunityId,
 } = require('../utilities/location');
 
 const isObjectId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isValid(v);
