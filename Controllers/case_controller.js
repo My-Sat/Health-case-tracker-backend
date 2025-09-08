@@ -81,13 +81,11 @@ function readNameCandidate(v) {
  * Given a case-like object (possibly populated), synthesize a simple location object:
  * { region: string, district: string, subDistrict: string, community: string }
  *
- * Priority used here (more robust than before):
- * 1) case.location (only if it contains region/district/subDistrict values)
- * 2) if case.location contains only community -> try to enrich parents from:
- *      a) populated case.community (if it contains region/district/subDistrict)
- *      b) healthFacility.location (or hf.region/hf.district/hf.subDistrict)
- * 3) populated case.community (if present)
- * 4) healthFacility.location / top-level hf fields
+ * Priority:
+ * 1) case.location (populated)
+ * 2) case.community (populated) -> look for community.region/district/subDistrict
+ * 3) healthFacility.location (synthesized earlier)
+ * 4) fallback to healthFacility.region/district/subDistrict/community fields
  */
 function synthesizeCaseLocation(caseObj) {
   const caseLoc = caseObj.location || {};
@@ -96,8 +94,7 @@ function synthesizeCaseLocation(caseObj) {
   const subDistrictFromCase = readNameCandidate(caseLoc.subDistrict);
   const communityFromCase = readNameCandidate(caseLoc.community);
 
-  // If case-level location contains explicit parent names, prefer it.
-  if (regionFromCase || districtFromCase || subDistrictFromCase) {
+  if (regionFromCase || districtFromCase || subDistrictFromCase || communityFromCase) {
     return {
       region: regionFromCase,
       district: districtFromCase,
@@ -106,50 +103,6 @@ function synthesizeCaseLocation(caseObj) {
     };
   }
 
-  // If case-level location only has a community name (no parents),
-  // try to enrich using populated community doc or the healthFacility.
-  if (communityFromCase) {
-    // 2a) try the populated community document for parents
-    const com = caseObj.community || {};
-    const comRegion = readNameCandidate(com.region);
-    const comDistrict = readNameCandidate(com.district);
-    const comSubDistrict = readNameCandidate(com.subDistrict);
-
-    if (comRegion || comDistrict || comSubDistrict) {
-      return {
-        region: comRegion,
-        district: comDistrict,
-        subDistrict: comSubDistrict,
-        community: communityFromCase,
-      };
-    }
-
-    // 2b) fall back to healthFacility location or top-level hf fields
-    const hf = caseObj.healthFacility || {};
-    if (hf.location && typeof hf.location === 'object') {
-      const hfRegion = readNameCandidate(hf.location.region);
-      const hfDistrict = readNameCandidate(hf.location.district);
-      const hfSub = readNameCandidate(hf.location.subDistrict);
-      if (hfRegion || hfDistrict || hfSub) {
-        return {
-          region: hfRegion,
-          district: hfDistrict,
-          subDistrict: hfSub,
-          community: communityFromCase,
-        };
-      }
-    }
-
-    // nothing more to enrich — return community with empty parents
-    return {
-      region: '',
-      district: '',
-      subDistrict: '',
-      community: communityFromCase,
-    };
-  }
-
-  // 3) case.community (populated) — use it if available
   const com = caseObj.community || {};
   const communityName = readNameCandidate(com);
   const communityRegion = readNameCandidate(com.region);
@@ -165,7 +118,6 @@ function synthesizeCaseLocation(caseObj) {
     };
   }
 
-  // 4) finally, use healthFacility.location or hf fields
   const hf = caseObj.healthFacility || {};
   if (hf.location && typeof hf.location === 'object') {
     const region = readNameCandidate(hf.location.region);
