@@ -179,7 +179,6 @@ async function namesToRefs(location = {}, communityName, fallbackFacility) {
   };
 }
 
-// --------------------- controllers ---------------------
 
 const createCase = async (req, res) => {
   try {
@@ -796,7 +795,7 @@ const getCaseTypeSummary = async (req, res) => {
       facilityFilter.subDistrict = subDistrictId;
     }
 
-    // --- facility filter (new)
+    // --- facility filter (new) ---
     if (facility && facility !== 'all') {
       // If facility looks like ObjectId, prefer resolution by id
       if (isObjectId(facility)) {
@@ -976,6 +975,7 @@ const getCaseTypeSummary = async (req, res) => {
     return res.status(500).json({ message: 'Failed to load case type summary' });
   }
 };
+
 
 
 module.exports = {
