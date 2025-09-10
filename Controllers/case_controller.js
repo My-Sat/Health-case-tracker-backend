@@ -737,7 +737,7 @@ const unarchiveCase = async (req, res) => {
 
 const getCaseTypeSummary = async (req, res) => {
   try {
-    const { caseType, region, district, subDistrict, community } = req.query;
+    const { caseType, region, district, subDistrict, community, facility } = req.query;
 
     // Base match: ignore archived cases and only include suspected/confirmed
     const match = { archived: false, status: { $in: ['suspected', 'confirmed'] } };
@@ -796,14 +796,38 @@ const getCaseTypeSummary = async (req, res) => {
       facilityFilter.subDistrict = subDistrictId;
     }
 
-    // If we have any facilityFilter constraints, find matching facility ids and add to match
-    if (Object.keys(facilityFilter).length > 0) {
-      const facilityIds = await HealthFacility.find(facilityFilter).distinct('_id');
-      if (!facilityIds || facilityIds.length === 0) {
-        // No facilities under that region/district/subDistrict -> empty result
-        return res.json([]);
+    // --- facility filter (new)
+    if (facility && facility !== 'all') {
+      // If facility looks like ObjectId, prefer resolution by id
+      if (isObjectId(facility)) {
+        const fid = new mongoose.Types.ObjectId(facility);
+        // If facilityFilter has constraints, ensure the facility belongs there
+        const facQuery = Object.keys(facilityFilter).length > 0 ? { _id: fid, ...facilityFilter } : { _id: fid };
+        const facDoc = await HealthFacility.findOne(facQuery);
+        if (!facDoc) return res.json([]); // not found or doesn't match scope
+        match.healthFacility = facDoc._id;
+      } else {
+        // Try to find by name, prefer scoped search first
+        let facDoc = null;
+        if (Object.keys(facilityFilter).length > 0) {
+          facDoc = await HealthFacility.findOne({ name: facility, ...facilityFilter });
+        }
+        if (!facDoc) {
+          facDoc = await HealthFacility.findOne({ name: facility });
+        }
+        if (!facDoc) return res.json([]); // facility name not found
+        match.healthFacility = facDoc._id;
       }
-      match.healthFacility = { $in: facilityIds };
+    } else {
+      // No explicit facility supplied — fallback to facilityFilter -> find matching facility ids
+      if (Object.keys(facilityFilter).length > 0) {
+        const facilityIds = await HealthFacility.find(facilityFilter).distinct('_id');
+        if (!facilityIds || facilityIds.length === 0) {
+          // No facilities under that region/district/subDistrict -> empty result
+          return res.json([]);
+        }
+        match.healthFacility = { $in: facilityIds };
+      }
     }
 
     // --- community filter (case.community) (id or name)
