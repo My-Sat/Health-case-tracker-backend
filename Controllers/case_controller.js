@@ -673,7 +673,12 @@ const archiveCase = async (req, res) => {
 
 const getArchivedCases = async (req, res) => {
   try {
-    const archived = await Case.find({ archived: true })
+    // If user is admin, return all archived; otherwise limit to officer's archived cases
+    const query = req.user?.role === 'admin'
+      ? { archived: true }
+      : { archived: true, officer: req.user._id };
+
+    const archived = await Case.find(query)
       .populate('officer', 'fullName')
       .populate('caseType')
       .populate({
@@ -691,6 +696,7 @@ const getArchivedCases = async (req, res) => {
       .populate({ path: 'location.district', select: 'name', model: 'District' })
       .populate({ path: 'location.subDistrict', select: 'name', model: 'SubDistrict' })
       .populate({ path: 'location.community', select: 'name', model: 'Community' })
+      .sort({ timeline: -1 })
       .lean();
 
     archived.forEach((c) => {
