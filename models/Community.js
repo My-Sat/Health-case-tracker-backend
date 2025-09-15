@@ -3,7 +3,7 @@ const Schema = mongoose.Schema;
 
 const communitySchema = new Schema(
   {
-    name: { type: String, required: true, trim: true },
+    name: { type: String, required: true, trim: true, unique: true },
     // A community can belong either directly to a District OR to a SubDistrict
     district: { type: Schema.Types.ObjectId, ref: 'District', default: null },
     subDistrict: { type: Schema.Types.ObjectId, ref: 'SubDistrict', default: null },
